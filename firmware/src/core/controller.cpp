@@ -97,21 +97,16 @@ void HookPilotController::tick() {
 
   switch (state_) {
     case State::IDLE:
+      gate_.stopAll();
+      if (cfg_.observe_when_disarmed) monitorStep(now);  // observation only: never requests actuation
+      break;
+
     case State::SAFE_STOP:
       gate_.stopAll();
       break;
 
     case State::MONITOR:
-      if (awaiting_rearm_) {
-        if (d_.detector.rearmed(sample_)) awaiting_rearm_ = false;
-        break;
-      }
-      if (d_.detector.shouldTrigger(sample_)) {
-        d_.signal.freezeBaseline(true);
-        openEvent(now);
-        d_.detector.beginCandidate(sample_);
-        transition(State::CANDIDATE, "delta >= trigger_delta_n");
-      }
+      monitorStep(now);
       break;
 
     case State::CANDIDATE:
@@ -128,9 +123,14 @@ void HookPilotController::tick() {
     case State::HOOK_SET: {
       const ActuatorFeedback fb = in_.hook;
       if (ticks_ % 5 == 0) recordFeedback("hook_set", fb);
-      if (fb.at_target && !fb.active) {
+      if (!hook_done_ && fb.at_target && !fb.active) {
         recordFeedback("hook_set", fb);
         ev_.hook_set_completed = true;
+        hook_done_ = true;
+        hook_done_ms_ = now;
+      }
+      // Minimum dead time between hook-set stop and retrieval start (hook_to_retrieval_gap_ms).
+      if (hook_done_ && now - hook_done_ms_ >= cfg_.safety.hook_to_retrieval_gap_ms) {
         if (gatedRequest(ActuatorId::RETRIEVAL, "retrieve", cfg_.actuators.retrieval_target_m,
                          cfg_.actuators.retrieval_speed_m_s)) {
           transition(State::RETRIEVE, "hook set stroke complete; retrieval permitted");
@@ -163,10 +163,28 @@ void HookPilotController::tick() {
         closeEvent(State::IDLE,
                    "cycle_complete: actuators stopped, disarmed awaiting operator; fish_landed not inferred");
         d_.safety.disarm();
+        d_.signal.freezeBaseline(false);
+        awaiting_rearm_ = true;  // IDLE observation waits for a quiet line before the next candidate
         transition(State::IDLE, "cycle complete -> disarmed");
       }
       break;
     }
+  }
+}
+
+void HookPilotController::monitorStep(uint32_t now) {
+  if (awaiting_rearm_) {
+    if (d_.detector.rearmed(sample_)) awaiting_rearm_ = false;
+    return;
+  }
+  if (d_.detector.shouldTrigger(sample_)) {
+    d_.signal.freezeBaseline(true);
+    openEvent(now);
+    ev_.has_trigger = true;
+    ev_.trigger_t_ms = now;
+    d_.detector.beginCandidate(sample_);
+    transition(State::CANDIDATE, d_.safety.armed() ? "delta >= trigger_delta_n"
+                                                   : "delta >= trigger_delta_n (observation only: disarmed)");
   }
 }
 
@@ -175,8 +193,21 @@ void HookPilotController::decideCandidate() {
   ev_.classification = c;
   ev_.features = c.features;
   ev_decided_ = true;
+  ev_.has_decision = true;
+  ev_.decision_t_ms = in_.now_ms;
+  const bool armed = d_.safety.armed();
+  const State rest = armed ? State::MONITOR : State::IDLE;
   if (c.result == ClassResult::BITE_CANDIDATE_CONFIRMED) {
     ev_.bite_detected = true;
+    if (!armed) {
+      // Observation only (disarmed): nothing is requested, nothing can move.
+      d_.signal.freezeBaseline(false);
+      awaiting_rearm_ = true;
+      closeEvent(State::IDLE, "disarmed_observation_only: no actuation requested");
+      transition(State::IDLE, "observation only (disarmed): no actuation requested");
+      return;
+    }
+    hook_done_ = false;
     if (gatedRequest(ActuatorId::HOOK_SET, "stroke_to", cfg_.actuators.hook_set_target_mm,
                      cfg_.actuators.hook_set_speed_mm_s)) {
       transition(State::HOOK_SET, "bite_candidate_confirmed; hook set permitted by safety");
@@ -195,8 +226,8 @@ void HookPilotController::decideCandidate() {
   }
   d_.signal.freezeBaseline(false);
   awaiting_rearm_ = true;
-  closeEvent(State::MONITOR, std::string("classifier_rejected: ") + toString(c.result));
-  transition(State::MONITOR, std::string("classifier: ") + toString(c.result));
+  closeEvent(rest, std::string("classifier_rejected: ") + toString(c.result));
+  transition(rest, std::string("classifier: ") + toString(c.result));
 }
 
 bool HookPilotController::gatedRequest(ActuatorId a, const char* command, double target, double speed) {
@@ -209,10 +240,13 @@ bool HookPilotController::gatedRequest(ActuatorId a, const char* command, double
   in_.hook = gate_.hookFeedback();
   in_.retrieval = gate_.retrievalFeedback();
   const SafetyDecision dec = gate_.request(req, in_);
+  if (request_log_.size() < 100000) request_log_.push_back({req, dec.permitted, dec.reason});
   if (ev_open_) {
     ev_.requested.push_back({req, dec.permitted, dec.reason});
-    if (dec.permitted) ev_any_permit_ = true;
-    recordFeedback(toString(a), a == ActuatorId::HOOK_SET ? gate_.hookFeedback() : gate_.retrievalFeedback());
+    if (dec.permitted) {
+      ev_any_permit_ = true;
+      recordFeedback(toString(a), a == ActuatorId::HOOK_SET ? gate_.hookFeedback() : gate_.retrievalFeedback());
+    }
   }
   return dec.permitted;
 }
@@ -278,7 +312,7 @@ Json HookPilotController::interlocksJson() const {
   j["sensor_valid"] = in_.sample.valid;
   j["comm_link_ok"] = in_.comm_link_ok && (in_.now_ms - in_.last_heartbeat_ms <= L.comm_timeout_ms);
   j["voltage_ok"] = in_.bus_voltage_v >= L.undervoltage_v;
-  j["bus_voltage_v"] = std::round(in_.bus_voltage_v * 1000.0) / 1000.0;
+  j["bus_voltage_v"] = in_.bus_voltage_v;
   j["hook_set_active"] = in_.hook.active;
   j["retrieval_active"] = in_.retrieval.active;
   j["mutual_exclusion"] = "enforced";
@@ -302,6 +336,11 @@ void HookPilotController::closeEvent(State final_state, const std::string& stop_
   ev_.final_state = final_state;
   ev_.stop_reason = stop_reason;
   ev_.faults = d_.safety.faults() | (final_state == State::SAFE_STOP ? d_.safety.activeConditions() : 0);
+  ev_.fault_latched_t_ms = Json::object();
+  for (int b = 0; b < kFaultBitCount; ++b) {
+    const uint32_t bit = 1u << b;
+    if (d_.safety.faults() & bit) ev_.fault_latched_t_ms[faultName(bit)] = d_.safety.latchTimeMs(bit);
+  }
   ev_.interlocks = interlocksJson();
   if (final_state == State::SAFE_STOP) ev_.decision = Decision::SAFE_STOP;
   else if (ev_any_permit_) ev_.decision = Decision::PERMIT;
@@ -330,11 +369,15 @@ void HookPilotController::enterSafeStop(const std::string& why) {
     }
     ev_.classification.rule_trace.push_back(std::string("state=") + toString(state_) + " -> " + why);
     ev_decided_ = true;
+    ev_.has_decision = true;
+    ev_.decision_t_ms = in_.now_ms;
   } else if (!ev_decided_) {
     Classification c = d_.detector.decide();
     ev_.classification = c;
     ev_.features = c.features;
     ev_decided_ = true;
+    ev_.has_decision = true;
+    ev_.decision_t_ms = in_.now_ms;
     ev_.classification.rule_trace.push_back("interrupted by safety: " + why);
   } else {
     ev_.classification.rule_trace.push_back(std::string("state=") + toString(state_) + " interrupted: " + why);
@@ -363,9 +406,48 @@ bool HookPilotController::requestArm(std::string* why) {
 void HookPilotController::requestDisarm() {
   gate_.stopAll();
   d_.safety.disarm();
+  gatherInputs(d_.clock.nowMs());
   if (state_ == State::SAFE_STOP) return;  // only reset leaves SAFE_STOP
-  if (ev_open_) closeEvent(State::IDLE, "operator_disarm");
+  if (ev_open_) {
+    if (!ev_decided_) {
+      Classification c = d_.detector.decide();
+      ev_.classification = c;
+      ev_.features = c.features;
+      ev_decided_ = true;
+      ev_.has_decision = true;
+      ev_.decision_t_ms = in_.now_ms;
+      ev_.classification.rule_trace.push_back("interrupted by operator_disarm");
+    } else {
+      ev_.classification.rule_trace.push_back(std::string("state=") + toString(state_) +
+                                              " interrupted: operator_disarm");
+    }
+    if (ev_any_permit_) {
+      recordFeedback("hook_set", gate_.hookFeedback());
+      recordFeedback("retrieval", gate_.retrievalFeedback());
+    }
+    closeEvent(State::IDLE, "operator_disarm");
+    awaiting_rearm_ = true;  // IDLE observation waits for a quiet line before the next candidate
+  }
+  d_.signal.freezeBaseline(false);
   transition(State::IDLE, "disarmed by operator");
+}
+
+void HookPilotController::logNoEventSummary() {
+  if (ev_open_) return;
+  openEvent(in_.now_ms);
+  ev_.features.baseline_n = sample_.baseline;
+  ev_.features.sensor_health = sample_.health;
+  ev_.features.short_term_variance = sample_.variance;
+  ev_.classification.result = ClassResult::NO_EVENT;
+  char b[200];
+  std::snprintf(b, sizeof(b), "No candidate in the observation window: delta never reached trigger_delta_n %.3f N.",
+                d_.detector.thresholds().trigger_delta_n);
+  ev_.classification.reason = b;
+  std::snprintf(b, sizeof(b), "t=%ums end of observation window: no candidate opened (state=%s)",
+                static_cast<unsigned>(in_.now_ms), toString(state_));
+  ev_.classification.rule_trace.push_back(b);
+  ev_decided_ = true;
+  closeEvent(state_, "no_event: nothing to actuate");
 }
 
 bool HookPilotController::requestReset(std::string* why) {
