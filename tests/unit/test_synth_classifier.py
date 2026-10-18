@@ -49,10 +49,12 @@ def test_threshold_change_changes_outcome():
     assert classify(sig, th).result == "no_event"
 
 
-def test_variant_detection():
+def test_single_rule_set():
+    # one classifier rule set since 2026-10-18: every record (firmware, web demo, Python) replays with it
     assert detect_variant({"classification": {"thresholds": {"decision_window_ms": 600}}}) == "fw"
-    assert detect_variant({"classification": {"thresholds": {"confirm_min_ms": 300, "baseline_alpha": 0.02}}}) == "web"
-    assert detect_variant({"classification": {"implementation": "python-port-of-web-demo-ts@x"}}) == "web"
+    assert detect_variant({"classification": {"implementation": "ts-port-of-firmware-cpp@2026-10-18"}}) == "fw"
+    with pytest.raises(ValueError):
+        Thresholds.defaults("web")
 
 
 def test_rule_order_fw():
@@ -68,11 +70,9 @@ def test_rule_order_fw():
     assert decide_fw(base | {"continuous_above_ms": 40}, th)[0] == "rejected_transient"
 
 
-def test_web_variant_runs_on_same_signals():
-    th = Thresholds.defaults("web")
-    assert classify(generate("bite", 1).samples(), th).variant == "web"
-    assert decide_from_features(dict(sensor_health="ok", peak_delta_n=13, duration_above_ms=300,
-                                     oscillation_count=0, max_rate_n_per_s=9), th) == "rejected_manual_handling"
+def test_thresholds_from_record_ignores_legacy_variant_key():
+    th = Thresholds.from_record({"variant": "web", "manual_handling_delta_n": 7.5})
+    assert th.variant == "fw" and th.manual_handling_delta_n == 7.5 and th.decision_window_ms == 600.0
 
 
 def test_rejects_non_50hz():
