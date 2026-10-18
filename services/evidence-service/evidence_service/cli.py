@@ -75,18 +75,33 @@ def cmd_export(a) -> int:
 
 
 def cmd_generate(a) -> int:
-    from .engine import EventLog, build_event
+    from .engine import EventLog, run_scenario
     if os.path.exists(a.out) and not a.append:
         os.remove(a.out)
     log = EventLog(a.out)
     raw_dir = os.path.join(os.path.dirname(os.path.abspath(a.out)), "raw") if a.raw else None
     counter = len(log.records)
+    overrides = {}
+    for kv in a.set or []:
+        k, _, v = kv.partition("=")
+        overrides[k] = float(v)
     scenarios = a.scenario.split(",")
+    written = 0
+    trace_f = open(a.trace, "w", encoding="utf-8") if a.trace else None
     for sc in scenarios:
         for seed in range(a.seed, a.seed + a.count):
-            counter += 1
-            log.append(build_event(sc, seed, armed=not a.disarmed, counter=counter, raw_dir=raw_dir))
-    print(f"SIMULATION: wrote {len(scenarios) * a.count} records to {a.out}" + (f" (+ raw CSVs in {raw_dir})" if raw_dir else ""))
+            run = run_scenario(sc, seed, armed=not a.disarmed, injections=a.inject or [], overrides=overrides,
+                               counter=counter + 1, raw_dir=raw_dir, trace=bool(trace_f))
+            for rec in run.records:  # every record of the run (multi-event runs included)
+                counter += 1
+                written += 1
+                log.append(rec)
+            if trace_f:
+                for line in run.trace:
+                    trace_f.write(json.dumps(dict(line, scenario=sc, seed=seed), separators=(",", ":")) + "\n")
+    if trace_f:
+        trace_f.close()
+    print(f"SIMULATION: wrote {written} records to {a.out}" + (f" (+ raw CSVs in {raw_dir})" if raw_dir else ""))
     return 0
 
 
@@ -123,6 +138,9 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--raw", action="store_true", help="also write raw CSV files and raw_data_sha256")
     g.add_argument("--disarmed", action="store_true")
     g.add_argument("--append", action="store_true")
+    g.add_argument("--inject", action="append", help="fault injection kind@t_ms|retrieval+ms[:value] (repeatable)")
+    g.add_argument("--set", action="append", help="parameter override name=value (repeatable)")
+    g.add_argument("--trace", help="write the per-tick trace (JSON lines) to this file")
     g.set_defaults(fn=cmd_generate)
     h = sub.add_parser("hash", help="print canonical record sha256")
     h.add_argument("event")
