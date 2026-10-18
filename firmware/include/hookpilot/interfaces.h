@@ -60,6 +60,7 @@ class BiteDetector {
   // After a decision: is the detector re-armed (signal quiet again)?
   virtual bool rearmed(const ProcessedSample& s) = 0;
   virtual const ClassifierThresholds& thresholds() const = 0;
+  virtual uint32_t triggerTimeMs() const = 0;  // t_ms of the trigger sample of the current/last candidate
 };
 
 class SafetyController {
@@ -77,6 +78,8 @@ class SafetyController {
   // Clears latched faults whose condition is gone. Returns true if no fault remains.
   virtual bool clearFaults(const SafetyInputs& in) = 0;
   virtual void latchFault(uint32_t fault) = 0;   // e.g. WATCHDOG_RESET at boot
+  // t_ms of the update() that latched this fault bit (0 for a boot latch); valid while latched.
+  virtual uint32_t latchTimeMs(uint32_t single_bit) const = 0;
   virtual const SafetyLimits& limits() const = 0;
 };
 
