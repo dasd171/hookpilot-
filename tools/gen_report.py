@@ -88,7 +88,8 @@ def main() -> int:
              "hardware. Do not quote them as field performance.\n")
     L.append(f"- Generated: {prov['generated_utc']} · Python {prov['python']} · runtime {prov['runtime_s']} s")
     L.append(f"- Classifier: `{CLASSIFIER_ID}` ({IMPLEMENTATION['fw']}), generator `{GENERATOR_ID}`")
-    L.append(f"- Seeds per scenario: {a.seeds} (1..{a.seeds}); {len(records)} event records total")
+    L.append(f"- Seeds per scenario: {a.seeds} (1..{a.seeds}); {len(records)} event records total "
+             "(every record of every run; per-scenario classification counts use the first record of each run)")
     L.append(f"- Reproduce: `{prov['command']}`\n")
     L.append("## Headline (provisional thresholds, synthetic data)\n")
     L.append("| Metric | Value | 95% Wilson CI |\n|---|---|---|")
@@ -129,12 +130,16 @@ def main() -> int:
         ds = f"mean {d['mean']}, p95 {d['p95']}, max {d['max']} (n={d['n']})" if d.get("n") else "n/a (latched at classification)"
         L.append(f"| {sc} | {v['expected_fault_latched']}/{v['n']} | {v['ended_in_SAFE_STOP']} | {ds} |")
     L.append("\nLatencies are on the simulated 20 ms tick and reflect the configured debounce/timeout values "
-             "(over_tension_samples, stall_window_ms, comm_timeout_ms). Real e-stop / fault response must be measured on hardware.\n")
+             "(over_tension_samples, stall_window_ms, comm_timeout_ms). Condition onset: motor_stall / "
+             "comm_loss = the first tick the injected fault acts (injection happens at the end of the first tick with "
+             "t - retrieval start >= fault_after_retrieval_start_ms); excessive_tension = first sample above the "
+             "retrieval force limit after the retrieval request (or above the hard max). Latch ticks come from "
+             "safety.fault_latched_t_ms. Real e-stop / fault response must be measured on hardware.\n")
     L.append("## Evidence invariants (all records)\n")
     L.append(f"- Schema-valid: {inv['schema_valid']}/{inv['schema_validated']} validated")
     L.append(f"- Record hash + chain link verified: {inv['hash_and_chain_ok']}/{inv['records']}")
     L.append(f"- Deterministic replay OK: {inv['replay_ok']}/{inv['replayed']}")
-    L.append(f"- Hook-set/retrieval telemetry overlap: {inv['simultaneous_actuation']} records")
+    L.append(f"- Hook-set moving inside a retrieval active interval: {inv['simultaneous_actuation']} records")
     L.append(f"- Actuation requested while disarmed: {inv['actuation_while_disarmed']} records")
     L.append(f"- fish_landed values: {inv['fish_landed']} (never inferred)\n")
     L.append("## Threshold sensitivity (classifier only, "
@@ -146,10 +151,11 @@ def main() -> int:
     L.append("\nThe sweep shows the recall / false-trigger trade-off on synthetic data only; choosing real thresholds "
              "requires calibrated bench data and labeled field recordings (docs/calibration.md).\n")
     L.append("## Implementations\n")
-    L.append("One rule set and one generator are shared by all three implementations: firmware C++ (ground truth), "
-             "this Python port, and the web demo's TypeScript port (`hookpilot-synth-v1` + firmware defaults). "
-             "Agreement is checked by tests/integration/test_cross_impl.py and apps/web-demo/tests/cross_impl.test.ts; "
-             "this report itself is computed with the Python port only.\n")
+    L.append("One generator, one rule set and one engine (state machine, safety controller, actuator and line-load "
+             "models, fault injection; docs/engine-spec.md) are shared by all three implementations: firmware C++ "
+             "(ground truth), this Python port, and the web demo's TypeScript port. Tick-by-tick agreement is checked by "
+             "tests/integration/test_cross_impl.py (firmware vs Python) and apps/web-demo/tests/cross_impl.test.ts "
+             "(TS vs Python); this report itself is computed with the Python port only.\n")
     with open(os.path.join(a.out, "simulation_report.md"), "w") as f:
         f.write("\n".join(L) + "\n")
     print(f"SIMULATION report written to {a.out} in {elapsed:.1f}s")
