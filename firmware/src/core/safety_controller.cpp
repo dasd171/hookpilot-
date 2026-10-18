@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <string>
 
 namespace hp {
 
@@ -55,6 +56,9 @@ uint32_t DefaultSafetyController::evaluate(const SafetyInputs& in) {
   if (in.hook.active) {
     if (!hook_was_active_) hook_since_ = in.now_ms;
     if (in.now_ms - hook_since_ > lim_.hook_set_timeout_ms) c |= FAULT_ACTUATOR_TIMEOUT;
+  } else if (hook_was_active_) {
+    hook_ran_ = true;
+    hook_idle_since_ = in.now_ms;
   }
   hook_was_active_ = in.hook.active;
   if (in.retrieval.active) {
@@ -115,10 +119,23 @@ uint32_t DefaultSafetyController::evaluate(const SafetyInputs& in) {
   return c;
 }
 
+void DefaultSafetyController::stampLatches(uint32_t newly, uint32_t now) {
+  for (int b = 0; b < kFaultBitCount; ++b)
+    if (newly & (1u << b)) latch_t_[b] = now;
+}
+
+uint32_t DefaultSafetyController::latchTimeMs(uint32_t bit) const {
+  for (int b = 0; b < kFaultBitCount; ++b)
+    if (bit == (1u << b)) return latch_t_[b];
+  return 0;
+}
+
 uint32_t DefaultSafetyController::update(const SafetyInputs& in) {
+  last_now_ = in.now_ms;
   active_ = evaluate(in);
   uint32_t latch = active_;
   if (!armed_) latch &= ~FAULT_COMM_LOSS;  // comm loss is only critical while armed (documented)
+  stampLatches(latch & ~latched_, in.now_ms);
   latched_ |= latch;
   if (latched_) armed_ = false;
   return latched_;
@@ -145,6 +162,9 @@ SafetyDecision DefaultSafetyController::permit(const ActuatorRequest& req, const
       return deny("deny: hook_set speed " + num(req.speed) + " mm/s outside limits");
   } else {
     if (in.hook.active) return deny("deny: mutual exclusion (hook_set active)");
+    if (hook_ran_ && in.now_ms - hook_idle_since_ < lim_.hook_to_retrieval_gap_ms)
+      return deny("deny: hook_set stopped " + std::to_string(in.now_ms - hook_idle_since_) +
+                  " ms ago (< hook_to_retrieval_gap_ms)");
     if (!(req.target > 0 && req.target <= lim_.retrieval_travel_limit_m))
       return deny("deny: retrieval target " + num(req.target) + " m outside travel limits");
     if (!(req.speed > 0 && req.speed <= lim_.retrieval_max_speed_m_s))
