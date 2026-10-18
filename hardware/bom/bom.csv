@@ -1,0 +1,42 @@
+category,part,qty,unit_price_usd,price_status,extended_usd,sourcing_notes
+Compute,ESP32-WROOM-32E DevKitC (main controller),1,10,ESTIMATE,10,"Espressif DevKitC or equivalent; classic ESP32 chosen for HX711/LEDC/PCNT examples; verify flash size >= 4 MB"
+Compute,Safety supervisor MCU board (Seeed XIAO RP2040 class),1,6,ESTIMATE,6,"Independent clock + power branch; any small MCU with watchdog works; firmware for it not yet written"
+Sensing,Straight-bar load cell 1 kg (TAL221-class),2,8,ESTIMATE,16,"One spare; check IP rating or pot strain-gauge area; 1 kg covers ~2.9x hard-max tension at theta=20 deg"
+Sensing,HX711 24-bit load-cell ADC breakout (80 SPS capable),2,5,ESTIMATE,10,"Need RATE pin set to 80 SPS for 50 Hz sampling; some cheap boards are fixed at 10 SPS - verify; one spare"
+Sensing,INA219 current/voltage sensor breakout,1,6,ESTIMATE,6,"I2C 0x40; shunt sized for <=3.2 A or replace shunt; bus voltage up to 26 V"
+Sensing,AS5600 magnetic angle sensor + diametric magnet,1,5,ESTIMATE,5,"I2C 0x36; measures hook-set pivot angle (actuator position telemetry)"
+Sensing,DS18B20 waterproof temperature probe,1,4,ESTIMATE,4,"Motor housing temperature (OVER_TEMP); 1-Wire with 4.7k pull-up"
+Sensing,Miniature stainless bearings MR63ZZ / 683ZZ,6,2,ESTIMATE,12,"Sensor rollers (3 + spares); stainless for wet use"
+Sensing,Sensor rollers + lever + blank clamp (machined/printed),1,40,ESTIMATE,40,"Hard-anodised Al or stainless rollers; prototype body may be PETG/ASA print first"
+Actuation (hook-set),Waterproof high-torque servo 60 kg·cm class (7.4 V),1,45,ESTIMATE,45,"Choose a maker-rated IP67 model; check stall current for buck sizing; metal gears"
+Actuation (hook-set),Pivot shaft 8 mm 316 SS + 608-2RS stainless bearings x2,1,20,ESTIMATE,20,"Sealed bearings; shaft collars"
+Actuation (hook-set),Pushrod with ball-joint ends + quick-release pin,1,12,ESTIMATE,12,"M3/M4 ball links; detent quick-release pin for manual decoupling"
+Actuation (hook-set),Hook-lever limit switches (IP67 micro switch),2,6,ESTIMATE,12,"Home + over-travel (NC, wired into hardware safety chain)"
+Actuation (retrieval),12 V gearmotor ~50:1 with quadrature encoder (37 mm class),1,45,ESTIMATE,45,"Check stall current vs driver; encoder for line-progress/stall detection"
+Actuation (retrieval),DRV8874 single brushed DC motor driver carrier,1,11,ESTIMATE,11,"PH/EN, IPROPI current-sense output, nFAULT; 6 A peak / ~2 A continuous - verify thermal margin with chosen motor"
+Actuation (retrieval),Adjustable slip clutch (friction torque limiter),1,25,ESTIMATE,25,"Set below reel gear-train rating; may be a custom friction-disc stack"
+Actuation (retrieval),Handle coupler + dog clutch + flexible jaw coupling,1,25,ESTIMATE,25,"Reel-model specific adapter; prototype printed then machined"
+Power,3S Li-ion pack 11.1 V ~5 Ah with BMS,1,45,ESTIMATE,45,"Pack with protection board; no field charging; ship/transport rules apply"
+Power,Buck converter 5 V 3 A,1,6,ESTIMATE,6,"Logic + supervisor rail"
+Power,Buck converter 7.4 V 5 A (adjustable),1,10,ESTIMATE,10,"Servo rail; size for servo stall current"
+Power,Main fuse holder + 7.5 A blade fuse + master switch,1,10,ESTIMATE,10,"Fuse at pack terminal"
+Power,Battery voltage divider resistors 100k/22k 1 % + 100 nF,1,1,ESTIMATE,1,"ADC1 pin; 12.6 V -> 2.27 V"
+Safety,E-stop mushroom button NC latching (IP65+),1,15,ESTIMATE,15,"Twist-to-release; wired in series with actuator power enable"
+Safety,Actuator power enable: automotive relay 12 V + high-side MOSFET module,1,15,ESTIMATE,15,"AND of e-stop / over-travel / supervisor; relay contacts rated >= 10 A DC"
+Safety,Over-current comparator (LM393 class) + passives,1,3,ESTIMATE,3,"Fed from DRV8874 IPROPI; independent of firmware"
+Safety,Arm key switch (IP65),1,10,ESTIMATE,10,"Removable key = disarmed"
+Safety,Supervisor manual reset button (IP67) + buzzer + status LED,1,8,ESTIMATE,8,
+Mechanical,Aluminium frame plate 6061 6 mm + fasteners (stainless),1,40,ESTIMATE,40,"Rod-holder frame; bank spike or rail clamp adapter"
+Mechanical,Elastomer-faced hard stop + rubber-lined cradle,1,10,ESTIMATE,10,
+Enclosure/Waterproofing,IP67 enclosure electronics (~200x120x75 mm),1,25,ESTIMATE,25,"Polycarbonate with gasket; IP67 is a TARGET to verify"
+Enclosure/Waterproofing,IP67 enclosure battery,1,20,ESTIMATE,20,
+Enclosure/Waterproofing,IP68 cable glands assorted (PG7/M12),10,1.5,ESTIMATE,15,
+Enclosure/Waterproofing,IP67 circular connectors M8/M12 pairs,5,8,ESTIMATE,40,"Load cell, servo, motor, e-stop, limit switches"
+Enclosure/Waterproofing,ePTFE pressure-equalisation vents,2,4,ESTIMATE,8,
+Enclosure/Waterproofing,Conformal coating (acrylic) + potting compound,1,20,ESTIMATE,20,
+Enclosure/Waterproofing,Motor housing with shaft lip seal / O-rings,1,20,ESTIMATE,20,"Weakest IP67 point; custom"
+Wiring,Shielded 4-core cable (load cell) + silicone hookup wire + crimp kit,1,25,ESTIMATE,25,
+Wiring,Prototype PCB / perfboard + headers + JST connectors,1,15,ESTIMATE,15,
+Test equipment,Calibration weight set (M1 class 10 g - 2 kg),1,60,ESTIMATE,60,"Traceable class preferred; needed for docs/calibration.md"
+Test equipment,Digital force gauge (reference) 50 N,1,120,ESTIMATE,120,"Reference for tension-error metric; borrow if possible"
+Test equipment,Bench load rig parts (pulley + linear stage or weights + string),1,60,ESTIMATE,60,"Controlled load rig, roadmap phase 2"
