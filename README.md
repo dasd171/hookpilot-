@@ -15,7 +15,7 @@ these records onto Proof-of-Physical-Work concepts (local mock; official SDK not
 | Path | What |
 |---|---|
 | `apps/web-demo/` | React + TS + Vite interactive simulation demo (68 vitest tests) |
-| `firmware/` | C++17 firmware core, mocks, ESP32 driver stubs (provisional), 46 host tests |
+| `firmware/` | C++17 firmware core, mocks, ESP32 driver stubs (provisional), 53 host tests |
 | `services/evidence-service/` | Schema/hash-chain verification, deterministic replay, CSV export |
 | `services/konnex-adapter/` | Mock Konnex adapter, evidence bundle builder, 11-criteria verifier, disabled CLI skeleton |
 | `services/edge-controller/` | Bridge: firmware JSON lines -> evidence store -> mock adapter |
@@ -23,7 +23,7 @@ these records onto Proof-of-Physical-Work concepts (local mock; official SDK not
 | `packages/shared-types/` | TS types |
 | `hardware/` | Block diagram, mechanical spec, BOM (estimates), provisional wiring |
 | `tests/` | Python unit / integration / simulation tests + generated reports |
-| `docs/` | architecture, hardware-design, calibration, safety, testing, konnex-integration, builders-application, demo-script, roadmap |
+| `docs/` | architecture, engine-spec, hardware-design, calibration, safety, testing, konnex-integration, builders-application, demo-script, roadmap |
 
 ## Quick start
 ```bash
@@ -33,6 +33,7 @@ npm run -s sim -- --scenario bite --seed 42 --summary              # headless, r
 
 # Firmware (host simulation). Needs make + a C++17 compiler (pip install ziglang works: CXX="python3 -m ziglang c++")
 cd firmware && make test && make sim SCENARIO=bite SEED=42
+make sim SCENARIO=motor_stall SEED=3 TRACE=build/trace.jsonl   # + one JSON line per 20 ms tick (docs/engine-spec.md)
 
 # Python services and tests
 pip install jsonschema pytest
@@ -42,26 +43,29 @@ python tools/gen_report.py --seeds 300 --sweep-seeds 150          # regenerates 
 A single-file build of the demo is at `apps/web-demo/hookpilot-demo-standalone.html` (open directly in a browser).
 
 ## Results actually produced (synthetic data only, 2026-10-18)
-- Tests: web 68/68, firmware 46/46 (413 checks), Python 150 passed / 1 slow test skipped.
+- Tests: web 68/68 (vitest), firmware 53/53 (574 checks), Python 187 passed / 1 slow test skipped.
 - Cross-implementation: firmware C++, Python and the web demo's TypeScript share one generator
-  (`hookpilot-synth-v1`) and one classifier rule set with the firmware defaults. The TS generator matches Python
-  within 5.6e-17 N (10,779/10,800 fixture samples bit-identical). TS and Python agree on result, reason and
-  rule-trace text for every committed fixture (360 classifier windows, 320 engine runs). Web-demo records
-  replay from (scenario, seed) in Python (`signal_match`), and so do the firmware's.
+  (`hookpilot-synth-v1`), one classifier rule set **and one engine**: state machine, safety controller,
+  actuator / line-load models, fault injection and record contents (`docs/engine-spec.md`). On the 636 shared
+  cases (9 scenarios × armed/disarmed × seeds 1–20, 21 fault injections × 8, 6 parameter-override sets × 18)
+  the firmware `hookpilot_sim --trace` output and the Python engine agree tick for tick (255,036 trace lines,
+  641 records; max |numeric diff| 1.4e-14), and so do the TS engine and Python (max |diff| 4.4e-16): same
+  states, faults and the tick they latch, commands with permit/deny reasons, actuator position/current, line
+  tension, outcome and stop reason. The TS generator matches Python within 5.6e-17 N.
 - Simulation report (`tests/reports/simulation_report.md`): bite recall 85.7% (257/300) at the provisional
   1.0 N trigger; 0/1500 false triggers on synthetic non-bite scenarios; all safety scenarios ended in SAFE_STOP.
   These numbers only show the rules behave as designed on synthetic signals — they say nothing about real water.
 
 ## Known gaps (honest)
-- Rule traces are not byte-identical in all three yet. Python and the web demo start a candidate's trace with a
-  `t=… TRIGGER …` line. Firmware writes no such line but appends `interrupted by safety: …` / `state=… interrupted`
-  lines when SAFE_STOP cuts in. For a sensor fault while monitoring, firmware logs its own wording.
-  The rule lines (window, R0–R5) are identical. Result, reason and features match.
-- The actuation and safety models still differ between implementations, and so do record layouts outside
-  classification. Examples: the web demo adds simulated line load during actuation, firmware rounds samples to 4
-  decimals, and dwell times differ. Only signal + classification are cross-checked.
-- The web demo's first record per scenario is compared. Later candidates in the same run (after re-arm) are
-  firmware-style behaviour that the Python reference engine, which makes one decision per window, does not model.
+- Engine agreement is shown on the shared case list only (636 runs plus the unit tests). Record fields outside
+  the compared core still differ by design: device id / firmware version, event id, calibration label, the
+  thresholds block layout, Python's `test_outcome` / `class_match`, and therefore the record hashes.
+- New engine defaults are placeholders: the 100 ms hook-to-retrieval gap, 500 ms VERIFY dwell, 2-sample
+  over-tension debounce, 3-sample sensor-fault debounce, 200 ms stall window and the simulated line load /
+  motor current model are all provisional, not derived from a mechanism.
+- A NaN or disconnect *inside* a candidate window stops the cycle through the classifier's sensor rule before
+  the 3-sample safety debounce latches a fault, so that record shows `safe_stop` with no fault code (the code
+  latches 2 ticks later). Firmware behaviour, kept in all three.
 - ESP32 drivers never compiled with a real toolchain; pinout provisional; no secure-element signing.
 - Konnex SDK repo (github.com/konnex-world/konnex) unreachable on 2026-10-18 — adapter is a labeled mock. See
   `docs/konnex-docs-findings.md` and `docs/konnex-integration.md`.
