@@ -1,7 +1,7 @@
 # Live demo script (≈ 4 minutes)
 
 Everything shown is **SIMULATION**; say so at the start and whenever a number appears.
-Prep: terminal at repo root, `pip install jsonschema pytest`, web demo running at https://raw.githack.com/dasd171/hookpilot-/main/apps/web-demo/hookpilot-demo-standalone.html (or
+Prep: terminal at repo root, `pip install jsonschema pytest`, web demo running at https://raw.githack.com/dasd171/hookpilot-/main/apps/web-demo/hosted/index.html (or
 `npm run dev` in apps/web-demo), firmware host sim built (`make -C firmware sim` target available).
 
 ## 0:00 – 0:30 · What and why
