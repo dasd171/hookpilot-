@@ -1,0 +1,10 @@
+scenario,n,class_accuracy,test_pass,bite_candidate_confirmed,no_event,rejected_manual_handling,rejected_noise,rejected_sensor_fault,rejected_transient,rejected_vibration
+idle,300,1.0,300,0,300,0,0,0,0,0
+bite,300,0.8567,257,257,23,0,5,0,15,0
+noise_current,300,1.0,300,0,74,0,226,0,0,0
+rod_vibration,300,0.8267,300,0,50,0,1,0,1,248
+manual_handling,300,1.0,300,0,0,300,0,0,0,0
+sensor_failure,300,1.0,300,0,0,0,0,300,0,0
+excessive_tension,300,1.0,300,300,0,0,0,0,0,0
+motor_stall,300,1.0,300,300,0,0,0,0,0,0
+comm_loss,300,1.0,300,300,0,0,0,0,0,0
