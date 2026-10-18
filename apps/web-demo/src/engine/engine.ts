@@ -8,6 +8,11 @@
  * States: IDLE, MONITOR, CANDIDATE, CONFIRM, HOOK_SET, RETRIEVE, VERIFY, SAFE_STOP.
  * IDLE = disarmed (detector still observes and logs; safety denies every actuation).
  * SAFE_STOP exits only via resetToSafe() when no live fault remains, into IDLE (disarmed).
+ *
+ * Scenario runs use the shared generator hookpilot-synth-v1 and the firmware classifier rules, so every
+ * scenario record is replayable by evidence_service.replay from (scenario, seed): each scenario run
+ * re-initialises the signal processor and the detector, and all times inside a record (samples,
+ * decision, actuation) are "local" ms since the scenario start (timestamp.monotonic_ms keeps engine time).
  */
 import type {
   ActuationFeedback,
@@ -21,13 +26,16 @@ import type {
   ScenarioName,
 } from '../../../../packages/shared-types/src/index';
 import { SimActuator, type ActuatorTelemetry } from './actuators';
-import { CLASSIFIER_ID, DT_MS, PROVISIONAL_LABEL, SAMPLE_RATE_HZ, cloneConfig, defaultConfig, type EngineConfig } from './config';
-import { BiteDetector, type CandidateFeatures, type Decision } from './detector';
+import { CLASSIFIER_ID, CLASSIFIER_IMPLEMENTATION, DT_MS, SAMPLE_RATE_HZ, cloneConfig, defaultConfig, thresholdsRecord, type EngineConfig } from './config';
+import { BiteDetector, emptyFeatures, monitorSensorFaultDecision, noEventDecision, type Decision } from './detector';
 import { EventLogger, r3 } from './logger';
 import { Mulberry32 } from './prng';
 import { SignalProcessor, type SampleFeatures } from './processor';
 import { SafetyController, type PermitResult, type SafetyInputs } from './safety';
 import { IdleSource, generateScenario, type ScenarioSignal } from './signals';
+
+/** comm_loss scenario: how long the host heartbeat stays lost once injected (ms). Simulation choice. */
+const COMM_OUTAGE_MS = 2000;
 
 export const DEVICE_ID = 'hp-sim-0001';
 export const FIRMWARE_VERSION = 'web-demo-sim-0.1.0';
@@ -95,13 +103,17 @@ interface ScenarioRun {
   events: number;
   peakDelta: number;
   playbackDone: boolean;
+  /** every valid scenario sample (local time), attached to a no_event record */
+  samples: Array<[number, number]>;
 }
 
 interface OpenCycle {
+  /** local time (ms since the scenario start) */
   tStart: number;
   scenario: ScenarioName | null;
   scenarioSeed: number | null;
   groundTruth: string | null;
+  generator: string | null;
   samples: Array<[number, number]>;
   decision: Decision | null;
   requested: ActuationRequest[];
@@ -141,7 +153,12 @@ export class HookPilotEngine {
   private lastFeatures: SampleFeatures | null = null;
   private lastLive: FaultCode[] = [];
   private lastInterlocks: Record<string, boolean> = {};
-  private recent: Array<[number, number]> = []; // pre-trigger buffer
+  private recent: Array<[number, number]> = []; // pre-trigger buffer (local time)
+  /** engine time of the last scenario start; local time = t - timeBase */
+  private timeBase = 0;
+  /** actuation-model fault of the running scenario, armed when retrieval starts (local time) */
+  private pendingFault: { kind: 'motor_stall' | 'comm_loss'; atMs: number } | null = null;
+  private commOutage: { from: number; to: number } | null = null;
   private listeners = new Set<(e: HookPilotEvent) => void>();
 
   constructor(opts: EngineOptions) {
@@ -203,8 +220,15 @@ export class HookPilotEngine {
     if (this.state === 'SAFE_STOP') return this.refuse('Scenario refused: system is in SAFE_STOP. Reset first.');
     if (this.busy) return this.refuse('Scenario refused: another scenario/cycle is still running.');
     const signal = generateScenario(name, seed | 0);
-    this.run = { signal, k: 0, events: 0, peakDelta: 0, playbackDone: false };
-    this.say('info', `Scenario "${name}" started (seed ${seed | 0}, ${signal.durationMs} ms synthetic signal).`);
+    this.run = { signal, k: 0, events: 0, peakDelta: 0, playbackDone: false, samples: [] };
+    // fresh processor + detector: the record depends only on (scenario, seed) and the thresholds
+    this.timeBase = this.t;
+    this.processor.reset();
+    this.detector.reset();
+    this.recent = [];
+    this.pendingFault = null;
+    this.commOutage = null;
+    this.say('info', `Scenario "${name}" started (seed ${seed | 0}, ${signal.durationMs} ms ${signal.generator} signal).`);
     return { ok: true, reason: 'started' };
   }
 
@@ -216,6 +240,7 @@ export class HookPilotEngine {
       this.hookSet.idle();
       this.retrieval.idle();
       this.armed = false;
+      this.pendingFault = null;
       this.processor.reset();
       this.detector.reset();
       this.setState('IDLE');
@@ -232,6 +257,8 @@ export class HookPilotEngine {
       this.run = null;
     }
     this.armed = false;
+    this.pendingFault = null;
+    this.commOutage = null;
     this.safety.clearAll();
     this.processor.reset();
     this.detector.reset();
@@ -243,28 +270,42 @@ export class HookPilotEngine {
   /** Advance one 20 ms tick. */
   step(): void {
     const t = this.t;
+    const lt = t - this.timeBase; // local time: ms since the scenario start
     const L = this.config.safety;
 
     // 1. world
     let env: number;
     let hb = 1;
+    let lastScenarioSample = false;
     const run = this.run;
     if (run && !run.playbackDone) {
       const s = run.signal;
       env = s.tension[run.k];
-      hb = s.heartbeat[run.k];
-      if (s.stallFromMs !== null && run.k * DT_MS >= s.stallFromMs) this.retrieval.jam();
       run.k++;
-      if (run.k >= s.tension.length) run.playbackDone = true;
+      if (run.k >= s.tension.length) {
+        run.playbackDone = true;
+        lastScenarioSample = true;
+      }
     } else {
       env = this.idle.sample(t);
+    }
+    // actuation-model faults (motor_stall / comm_loss), timed from retrieval start as in engine.py
+    const pf = this.pendingFault;
+    if (pf && lt >= pf.atMs) {
+      if (pf.kind === 'motor_stall') this.retrieval.jam();
+      else this.commOutage = { from: pf.atMs, to: pf.atMs + COMM_OUTAGE_MS };
+      this.pendingFault = null;
+    }
+    if (this.commOutage) {
+      if (lt >= this.commOutage.from && lt < this.commOutage.to) hb = 0;
+      else if (lt >= this.commOutage.to) this.commOutage = null;
     }
     if (hb) this.lastHeartbeat = t;
     const load = this.hookSet.lineLoad(this.config.actuators) + this.retrieval.lineLoad(this.config.actuators);
     const raw = Number.isFinite(env) ? env + load : NaN;
 
     // 2. signal processing (baseline frozen while a candidate/cycle is open)
-    const f = this.processor.update(t, raw, this.cycle !== null);
+    const f = this.processor.update(lt, raw, this.cycle !== null);
     this.lastFeatures = f;
     if (run && f.valid) run.peakDelta = Math.max(run.peakDelta, f.delta);
 
@@ -275,9 +316,10 @@ export class HookPilotEngine {
 
     // 4. sample bookkeeping
     if (f.valid) {
-      this.recent.push([t, f.x]);
-      while (this.recent.length && this.recent[0][0] < t - PRE_TRIGGER_MS) this.recent.shift();
-      if (this.cycle) this.cycle.samples.push([t, f.x]);
+      this.recent.push([lt, f.x]);
+      while (this.recent.length && this.recent[0][0] < lt - PRE_TRIGGER_MS) this.recent.shift();
+      if (this.cycle) this.cycle.samples.push([lt, f.x]);
+      if (run && (!run.playbackDone || lastScenarioSample)) run.samples.push([lt, f.x]);
     }
     this.chart.push({ t, x: f.valid ? f.x : NaN, baseline: f.baseline, state: this.state });
     if (this.chart.length > 500) this.chart.shift();
@@ -286,10 +328,16 @@ export class HookPilotEngine {
     if (this.state === 'IDLE' || this.state === 'MONITOR' || this.state === 'CANDIDATE') {
       const out = this.detector.update(f);
       if (out.kind === 'candidate_started') {
-        this.openCycle(t);
+        this.openCycle(lt);
         this.setState('CANDIDATE');
       } else if (out.kind === 'decision') {
         this.onDecision(out.decision);
+      }
+      // end of the scenario window with a candidate still open: decide on what was observed
+      // (same as the Python port's finish(t_end))
+      if (lastScenarioSample && this.detector.inCandidate) {
+        const d = this.detector.forceDecision(lt);
+        if (d) this.onDecision(d);
       }
     }
 
@@ -307,12 +355,12 @@ export class HookPilotEngine {
     // 7. actuator telemetry
     if (this.cycle && this.tick % FEEDBACK_EVERY_TICKS === 0) {
       for (const a of [this.hookSet, this.retrieval]) {
-        if (a.status !== 'idle') this.cycle.feedback.push(this.feedbackOf(a, t, tension));
+        if (a.status !== 'idle') this.cycle.feedback.push(this.feedbackOf(a, lt, tension));
       }
     }
 
     // 8. scenario completion
-    if (this.run && this.run.playbackDone && !this.cycle) this.finishScenario();
+    if (this.run && this.run.playbackDone && !this.cycle) this.finishScenario(lt);
 
     this.tick++;
     this.t += DT_MS;
@@ -357,7 +405,7 @@ export class HookPilotEngine {
       sensor_health: f ? f.health : 'ok',
       detector_phase: this.detector.phase,
       scenario: this.run
-        ? { name: this.run.signal.scenario, seed: this.run.signal.seed, progress: Math.min(1, this.run.k / this.run.signal.tension.length) }
+        ? { name: this.run.signal.scenario as ScenarioName, seed: this.run.signal.seed, progress: Math.min(1, this.run.k / this.run.signal.tension.length) }
         : null,
       live_faults: [...this.lastLive],
       latched_faults: this.safety.latched,
@@ -370,6 +418,11 @@ export class HookPilotEngine {
   }
 
   // ------------------------------------------------------------------ internals
+  /** local time: ms since the last scenario start (record-internal time base) */
+  private get lt(): number {
+    return this.t - this.timeBase;
+  }
+
   private refuse(reason: string) {
     this.say('warn', reason);
     return { ok: false, reason };
@@ -423,9 +476,10 @@ export class HookPilotEngine {
     const run = this.run;
     this.cycle = {
       tStart: t,
-      scenario: run ? run.signal.scenario : null,
+      scenario: run ? (run.signal.scenario as ScenarioName) : null,
       scenarioSeed: run ? run.signal.seed : null,
-      groundTruth: run ? run.signal.scenario : null,
+      groundTruth: run ? run.signal.groundTruth : null,
+      generator: run ? run.signal.generator : null,
       samples: this.recent.slice(),
       decision: null,
       requested: [],
@@ -475,7 +529,7 @@ export class HookPilotEngine {
           actuator: 'hook_set',
           command: 'set_hook',
           limit: { travel_mm: A.hook_set_target_mm, max_travel_mm: L.hook_set_travel_limit_mm, timeout_ms: L.hook_set_timeout_ms, max_tension_n: L.hard_max_tension_n },
-          t_ms: this.t,
+          t_ms: this.lt,
         });
         this.hookSet.start(A.hook_set_target_mm, A.hook_set_speed_mm_per_s);
         this.say('info', 'Safety PERMITTED hook_set (simulated actuator).');
@@ -486,7 +540,7 @@ export class HookPilotEngine {
         if (!c) return;
         if (this.hookSet.status !== 'complete') return;
         c.hookSetCompleted = true;
-        c.feedback.push(this.feedbackOf(this.hookSet, this.t, inputs.tension_n));
+        c.feedback.push(this.feedbackOf(this.hookSet, this.lt, inputs.tension_n));
         const p = this.safety.requestPermit('retrieval', { ...inputs, state: 'HOOK_SET', hook_set: { ...inputs.hook_set, status: 'complete', active: false } });
         c.permits.push(p);
         this.hookSet.idle();
@@ -501,9 +555,13 @@ export class HookPilotEngine {
           actuator: 'retrieval',
           command: 'retrieve',
           limit: { distance_m: A.retrieval_target_m, max_tension_n: L.retrieval_force_limit_n, timeout_ms: L.retrieval_timeout_ms, stall_current_a: L.stall_current_a },
-          t_ms: this.t,
+          t_ms: this.lt,
         });
         this.retrieval.start(A.retrieval_target_m, A.retrieval_speed_m_per_s);
+        const sig = this.run ? this.run.signal : null;
+        if (sig && sig.faultAfterRetrievalStartMs !== null && (sig.scenario === 'motor_stall' || sig.scenario === 'comm_loss')) {
+          this.pendingFault = { kind: sig.scenario, atMs: this.lt + sig.faultAfterRetrievalStartMs };
+        }
         this.say('info', `Safety PERMITTED retrieval within force limit ${L.retrieval_force_limit_n.toFixed(1)} N.`);
         this.setState('RETRIEVE');
         return;
@@ -512,7 +570,7 @@ export class HookPilotEngine {
         if (!c) return;
         if (this.retrieval.status !== 'complete') return;
         c.retrievalCompleted = true;
-        c.feedback.push(this.feedbackOf(this.retrieval, this.t, inputs.tension_n));
+        c.feedback.push(this.feedbackOf(this.retrieval, this.lt, inputs.tension_n));
         this.retrieval.idle();
         this.setState('VERIFY');
         return;
@@ -536,7 +594,7 @@ export class HookPilotEngine {
     const reason = `safe_stop: ${faults.join(', ')}`;
     if (this.cycle) {
       if (!this.cycle.decision) {
-        const d = this.detector.forceDecision(this.t);
+        const d = this.detector.forceDecision(this.lt);
         if (d) this.cycle.decision = d;
       }
       this.cycle.armedAtDecision = this.cycle.decision ? this.cycle.armedAtDecision : wasArmed;
@@ -544,33 +602,23 @@ export class HookPilotEngine {
       this.closeCycle('safe_stop', reason, 'SAFE_STOP', faults);
     } else {
       // stand-alone fault record (no candidate open)
-      this.openCycle(this.t);
+      this.openCycle(this.lt);
       const c = this.cycle!;
       c.armedAtDecision = wasArmed;
       const f = this.lastFeatures;
-      const sensorFault = faults.some((x) => x.startsWith('SENSOR_'));
-      const features: CandidateFeatures = {
-        baseline_n: f ? f.baseline : 0,
-        peak_delta_n: f && f.valid ? f.delta : 0,
-        max_rate_n_per_s: f ? Math.max(0, f.rate) : 0,
-        duration_above_ms: 0,
-        short_term_variance: f ? f.variance : 0,
-        oscillation_count: 0,
-        sensor_health: f ? f.health : 'ok',
-      };
-      const result: ClassificationResult = sensorFault ? 'rejected_sensor_fault' : 'no_event';
-      c.decision = {
-        result,
-        reason: sensorFault
-          ? `Sensor health "${features.sensor_health}" - readings invalid; no classification possible, no actuation.`
-          : `No bite candidate open; safety controller raised SAFE_STOP (${faults.join(', ')}).`,
-        rule_trace: sensorFault
-          ? [`R1 sensor_health=${features.sensor_health} != ok -> FAIL`, `=> ${result}`]
-          : ['no candidate open', `=> ${result}`],
-        features,
-        t_start_ms: this.t,
-        t_decision_ms: this.t,
-      };
+      if (f && !f.valid) {
+        // same convention as the Python port: sensor health failure while monitoring
+        c.decision = monitorSensorFaultDecision(f);
+      } else {
+        c.decision = {
+          result: 'no_event',
+          reason: `No bite candidate open; safety controller raised SAFE_STOP (${faults.join(', ')}).`,
+          rule_trace: [`t=${this.lt}ms no candidate open -> safety ${reason}`],
+          features: emptyFeatures({ baseline_n: f ? f.baseline : 0, short_term_variance: f ? f.variance : 0, sensor_health: f ? f.health : 'ok' }),
+          t_start_ms: this.lt,
+          t_decision_ms: this.lt,
+        };
+      }
       this.detector.reset();
       this.setState('SAFE_STOP');
       this.closeCycle('safe_stop', reason, 'SAFE_STOP', faults);
@@ -579,32 +627,15 @@ export class HookPilotEngine {
     this.retrieval.idle();
   }
 
-  private finishScenario() {
+  private finishScenario(tEnd: number) {
     const run = this.run!;
     if (run.events === 0) {
-      // nothing triggered: log a no_event record so every scenario run is auditable
-      this.openCycle(this.t);
+      // nothing triggered: log a no_event record (with the whole scenario window) so every run is auditable
+      this.openCycle(tEnd);
       const c = this.cycle!;
-      c.samples = [];
-      const f = this.lastFeatures;
-      const th = this.config.classifier;
-      c.decision = {
-        result: 'no_event',
-        reason: `No candidate: delta peaked at ${run.peakDelta.toFixed(2)} N, below trigger ${th.trigger_delta_n.toFixed(2)} N.`,
-        rule_trace: [`TRIGGER max delta ${run.peakDelta.toFixed(2)} N < trigger_delta ${th.trigger_delta_n.toFixed(2)} N -> no candidate`, '=> no_event'],
-        features: {
-          baseline_n: f ? f.baseline : 0,
-          peak_delta_n: Math.max(0, run.peakDelta),
-          max_rate_n_per_s: 0,
-          duration_above_ms: 0,
-          short_term_variance: f ? f.variance : 0,
-          oscillation_count: 0,
-          sensor_health: f ? f.health : 'ok',
-        },
-        t_start_ms: this.t,
-        t_decision_ms: this.t,
-      };
-      c.tStart = this.t - run.signal.durationMs;
+      c.samples = run.samples.slice();
+      c.tStart = c.samples.length ? c.samples[0][0] : 0;
+      c.decision = noEventDecision(tEnd, this.config.classifier, this.lastFeatures);
       this.say('info', `Scenario "${run.signal.scenario}" ended without a candidate (no_event).`);
       this.closeCycle('deny', 'no_event: nothing to actuate', this.state === 'SAFE_STOP' ? 'SAFE_STOP' : this.restState());
     }
@@ -618,21 +649,13 @@ export class HookPilotEngine {
     this.cycle = null;
     const th = this.config.classifier;
     const L = this.config.safety;
-    const d = c.decision ?? {
+    const d: Decision = c.decision ?? {
       result: 'no_event' as ClassificationResult,
       reason: 'Cycle closed before a classification was made.',
-      rule_trace: ['=> no_event'],
-      features: {
-        baseline_n: 0,
-        peak_delta_n: 0,
-        max_rate_n_per_s: 0,
-        duration_above_ms: 0,
-        short_term_variance: 0,
-        oscillation_count: 0,
-        sensor_health: 'ok' as const,
-      },
+      rule_trace: [`t=${this.lt}ms cycle closed before a classification was made`],
+      features: emptyFeatures(),
       t_start_ms: c.tStart,
-      t_decision_ms: this.t,
+      t_decision_ms: this.lt,
     };
     this.counter++;
     const id = `${DEVICE_ID}-${String(this.counter).padStart(6, '0')}-${this.idRng.nextU32().toString(16).padStart(8, '0')}`;
@@ -654,27 +677,31 @@ export class HookPilotEngine {
         ...(c.scenario ? { scenario: c.scenario } : {}),
         ...(c.scenarioSeed !== null ? { seed: c.scenarioSeed } : {}),
         ground_truth_label: c.groundTruth,
+        ...(c.generator ? { generator: c.generator } : {}),
       },
       timestamp: {
-        start_utc: new Date(this.epochMs + c.tStart).toISOString(),
+        start_utc: new Date(this.epochMs + this.timeBase + c.tStart).toISOString(),
         end_utc: new Date(this.epochMs + this.t).toISOString(),
-        monotonic_ms: c.tStart,
+        monotonic_ms: this.timeBase + c.tStart,
         clock_quality: 'host_clock_simulated',
       },
       calibration: { calibration_version: 'sim-uncalibrated-0', scale_n_per_count: 1, offset_counts: 0, calibrated_utc: null },
       sensor_data: {
         sample_rate_hz: SAMPLE_RATE_HZ,
         units: 'N',
-        samples: c.samples.map(([t, x]) => [t, r3(x)] as [number, number]),
+        // full precision: replay regenerates (scenario, seed) and compares within 1e-6 N
+        samples: c.samples.map(([t, x]) => [t, x] as [number, number]),
         raw_data_ref: null,
         raw_data_sha256: null,
       },
+      // same feature keys as firmware and the Python port (unrounded, so recorded rules re-evaluate exactly)
       features: {
-        baseline_n: r3(d.features.baseline_n),
-        peak_delta_n: r3(d.features.peak_delta_n),
-        max_rate_n_per_s: r3(d.features.max_rate_n_per_s),
+        baseline_n: d.features.baseline_n,
+        peak_delta_n: d.features.peak_delta_n,
+        max_rate_n_per_s: d.features.max_rate_n_per_s,
         duration_above_ms: d.features.duration_above_ms,
-        short_term_variance: r3(d.features.short_term_variance),
+        continuous_above_ms: d.features.continuous_above_ms,
+        short_term_variance: d.features.short_term_variance,
         oscillation_count: d.features.oscillation_count,
         sensor_health: d.features.sensor_health,
       },
@@ -683,19 +710,10 @@ export class HookPilotEngine {
         reason: d.reason,
         rule_trace: d.rule_trace,
         classifier: CLASSIFIER_ID,
-        thresholds: {
-          status: PROVISIONAL_LABEL,
-          trigger_delta_n: r3(th.trigger_delta_n),
-          confirm_min_ms: th.confirm_min_ms,
-          min_rate_n_per_s: r3(th.min_rate_n_per_s),
-          max_osc: th.max_osc,
-          manual_handling_delta_n: r3(th.manual_handling_delta_n),
-          max_duration_ms: th.max_duration_ms,
-          osc_band_n: r3(th.osc_band_n),
-          baseline_alpha: r3(th.baseline_alpha),
-          retrieval_force_limit_n: r3(L.retrieval_force_limit_n),
-          hard_max_tension_n: r3(L.hard_max_tension_n),
-        },
+        implementation: CLASSIFIER_IMPLEMENTATION,
+        thresholds: thresholdsRecord(th, L),
+        ...(c.decision && d.result !== 'no_event' ? { decision_t_ms: d.t_decision_ms } : {}),
+        ...(c.decision && c.decision.rule_trace[0]?.includes('TRIGGER') ? { trigger_t_ms: d.t_start_ms } : {}),
       },
       safety: {
         decision,
