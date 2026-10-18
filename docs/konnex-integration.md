@@ -43,7 +43,7 @@ Implemented in `services/konnex-adapter/konnex_adapter/task.py` (`TaskSpec`, ver
 | `firmware_version` | duplicated top-level for policy matching |
 | `test_scenario` (+ `seed`, `mode`) | scenario to run; seed makes SIMULATION runs reproducible |
 | `allowed_trigger_params` | ranges the recorded classifier thresholds must lie in (e.g. `trigger_delta_n` 0.3–3.0 N) |
-| `safety_constraints` | `retrieval_force_limit_n`, `hard_max_tension_n`, `over_tension_samples`, `hook_set_travel_limit_mm`, stall limits, `assist_pause_n`, require-armed, no-simultaneous-actuation, safe-stop-on-fault |
+| `safety_constraints` | `retrieval_force_limit_n`, `hard_max_tension_n`, `over_tension_samples`, `hook_set_travel_limit_mm`, stall limits, `assist_pause_n` (optional; no engine implements an assist pause since 2026-10-18), require-armed, no-simultaneous-actuation, safe-stop-on-fault |
 | `required_evidence_fields` | dotted paths that must be present and non-null in every record |
 
 **Outputs** (`task_result_from_record`)
