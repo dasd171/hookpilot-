@@ -65,6 +65,9 @@ class HookPilotController {
   bool requestArm(std::string* why = nullptr);
   void requestDisarm();
   bool requestReset(std::string* why = nullptr);  // SAFE_STOP -> IDLE when faults cleared; IDLE: ack
+  // End of an observation window (simulation harness): when nothing was logged, write one no_event
+  // record covering the pre-roll so every run is auditable. No-op while an event is open.
+  void logNoEventSummary();
 
   State state() const { return state_; }
   const ProcessedSample& lastSample() const { return sample_; }
@@ -73,6 +76,8 @@ class HookPilotController {
   bool eventOpen() const { return ev_open_; }
   uint32_t eventsLogged() const { return events_logged_; }
   const ActuatorGate& gate() const { return gate_; }
+  // Every actuator request with its safety decision, in order (for tick traces).
+  const std::vector<RequestEntry>& requestLog() const { return request_log_; }
 
  private:
   void transition(State to, const std::string& why);
@@ -83,6 +88,7 @@ class HookPilotController {
   void recordFeedback(const char* actuator, const ActuatorFeedback& fb);
   bool gatedRequest(ActuatorId a, const char* command, double target, double speed);
   void decideCandidate();
+  void monitorStep(uint32_t now);
   Json interlocksJson() const;
 
   ControllerConfig cfg_;
@@ -113,6 +119,9 @@ class HookPilotController {
   uint32_t event_counter_ = 0;
   uint32_t events_logged_ = 0;
   bool hook_returning_ = false;
+  bool hook_done_ = false;       // HOOK_SET stroke reached target (waiting for the retrieval gap)
+  uint32_t hook_done_ms_ = 0;
+  std::vector<RequestEntry> request_log_;
 };
 
 }  // namespace hp
