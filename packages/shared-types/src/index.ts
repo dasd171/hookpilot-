@@ -43,7 +43,8 @@ export type FaultCode =
   | 'COMM_LOSS'
   | 'UNDERVOLTAGE'
   | 'WATCHDOG_RESET'
-  | 'OVER_TEMP';
+  | 'OVER_TEMP'
+  | 'INTERLOCK';
 
 export type ActuatorName = 'hook_set' | 'retrieval';
 export type FinalState = 'MONITOR' | 'SAFE_STOP' | 'IDLE';
@@ -54,6 +55,9 @@ export interface ActuationRequest {
   command: string;
   limit?: Record<string, number>;
   t_ms?: number;
+  /** safety controller decision on this request (firmware, Python and web records) */
+  decision?: 'permit' | 'deny';
+  decision_reason?: string;
 }
 
 export interface ActuationFeedback {
@@ -95,6 +99,8 @@ export interface HookPilotEvent {
     samples?: Array<[number, number]>;
     raw_data_ref?: string | null;
     raw_data_sha256?: string | null;
+    /** non-finite readings inside the record window that were not inlined */
+    invalid_samples_omitted?: number;
   };
   features: {
     baseline_n?: number;
@@ -121,6 +127,8 @@ export interface HookPilotEvent {
     armed?: boolean;
     interlocks?: Record<string, boolean | string | number>;
     faults?: string[];
+    /** fault -> t_ms of the tick it latched (latched faults only) */
+    fault_latched_t_ms?: Record<string, number>;
   };
   actuation: {
     requested?: ActuationRequest[];
