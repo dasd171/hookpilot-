@@ -11,6 +11,8 @@ import {
   SCENARIOS,
   SafetyController,
   SignalProcessor,
+  faultList,
+  newFeedback,
   canonicalJson,
   classify,
   defaultConfig,
@@ -86,7 +88,8 @@ describe('synthetic signals', () => {
 
 // ---------------------------------------------------------------- classification per scenario
 const EXPECT: Record<ScenarioName, { result: string; decision: string; fault?: string; actuates: boolean; final: string }> = {
-  bite: { result: 'bite_candidate_confirmed', decision: 'permit', actuates: true, final: 'MONITOR' },
+  // a completed cycle ends in IDLE, disarmed (firmware semantics)
+  bite: { result: 'bite_candidate_confirmed', decision: 'permit', actuates: true, final: 'IDLE' },
   noise_current: { result: 'rejected_noise', decision: 'deny', actuates: false, final: 'MONITOR' },
   rod_vibration: { result: 'rejected_vibration', decision: 'deny', actuates: false, final: 'MONITOR' },
   manual_handling: { result: 'rejected_manual_handling', decision: 'deny', actuates: false, final: 'MONITOR' },
@@ -153,12 +156,16 @@ describe('scenario classification (armed, fixed seeds)', () => {
 
 // ---------------------------------------------------------------- state machine
 describe('state machine', () => {
-  it('armed bite walks the full cycle and returns to MONITOR', () => {
+  it('armed bite walks the full cycle and ends in IDLE, disarmed', () => {
     const e = runScenario('bite', 42, { armed: true });
-    expect(e.stateHistory.map((h) => h.to)).toEqual(['MONITOR', 'CANDIDATE', 'CONFIRM', 'HOOK_SET', 'RETRIEVE', 'VERIFY', 'MONITOR']);
+    expect(e.stateHistory.map((h) => h.to)).toEqual(['MONITOR', 'CANDIDATE', 'CONFIRM', 'HOOK_SET', 'RETRIEVE', 'VERIFY', 'IDLE']);
+    expect(e.armed).toBe(false); // disarmed after a completed cycle
     const r = e.events[0];
     expect(r.outcome.milestones).toEqual({ bite_detected: true, hook_set_completed: true, retrieval_completed: true, fish_landed: 'unknown' });
-    expect(r.actuation.requested!.map((a) => a.actuator)).toEqual(['hook_set', 'retrieval']);
+    // stroke, retrieval (after the hook_to_retrieval_gap_ms dead time), return to rest
+    expect(r.actuation.requested!.map((a) => a.actuator)).toEqual(['hook_set', 'retrieval', 'hook_set']);
+    const strokeDone = r.actuation.feedback!.find((f) => f.actuator === 'hook_set' && f.status === 'at_target')!;
+    expect(r.actuation.requested![1].t_ms! - strokeDone.t_ms!).toBe(100);
     expect(r.actuation.feedback!.length).toBeGreaterThan(5);
   });
 
@@ -172,12 +179,14 @@ describe('state machine', () => {
     expect(r.safety.decision).toBe('deny');
     expect(r.safety.armed).toBe(false);
     expect(r.actuation.requested).toEqual([]);
+    expect(r.outcome.stop_reason).toMatch(/^disarmed_observation_only/);
     expect(e.state).toBe('IDLE');
   });
 
   it('SAFE_STOP: arm and scenarios refused; reset blocked while fault live, then into IDLE disarmed', () => {
     const e = new HookPilotEngine({ seed: 42 });
-    e.arm();
+    e.stepN(2); // a valid sample is needed before arming
+    expect(e.arm().ok).toBe(true);
     e.startScenario('sensor_failure', 42);
     let guard = 0;
     while (e.state !== 'SAFE_STOP' && guard++ < 500) e.step();
@@ -201,6 +210,7 @@ describe('state machine', () => {
 
   it('operator disarm during retrieval stops actuators and logs operator_disarm', () => {
     const e = new HookPilotEngine({ seed: 42 });
+    e.stepN(2);
     e.arm();
     e.startScenario('bite', 42);
     let guard = 0;
@@ -274,64 +284,68 @@ describe('BiteDetector rules', () => {
 });
 
 // ---------------------------------------------------------------- safety unit
-describe('SafetyController', () => {
+describe('SafetyController (port of firmware DefaultSafetyController)', () => {
   const lim = defaultConfig().safety;
-  const idleAct = (name: 'hook_set' | 'retrieval') => ({ actuator: name, position: 0, current_a: 0, status: 'idle' as const, elapsed_ms: 0, active: false, history: [] as Array<[number, number]> });
   const inputs = (over: Partial<SafetyInputs> = {}): SafetyInputs => ({
-    t_ms: 0,
-    state: 'CONFIRM',
-    armed: true,
-    health: 'ok',
-    tension_n: 2,
-    sensor_valid: true,
-    heartbeat_age_ms: 0,
-    supply_v: 12.4,
-    e_stop: false,
-    hook_set: idleAct('hook_set'),
-    retrieval: idleAct('retrieval'),
+    now_ms: 0,
+    sample: { raw: 1.0, valid: true, health: 'ok' },
+    hook: newFeedback(),
+    retrieval: newFeedback(),
+    bus_voltage_v: 11.4,
+    temperature_c: 25,
+    estop_active: false,
+    comm_link_ok: true,
+    last_heartbeat_ms: 0,
     ...over,
   });
-  it('permits hook_set only when armed, healthy and from CONFIRM', () => {
+  it('denies everything while disarmed; arm needs a clean state', () => {
     const s = new SafetyController(lim);
-    expect(s.requestPermit('hook_set', inputs()).decision).toBe('permit');
-    expect(s.requestPermit('hook_set', inputs({ armed: false })).decision).toBe('deny');
-    expect(s.requestPermit('hook_set', inputs({ state: 'MONITOR' })).decision).toBe('deny');
-    expect(s.requestPermit('hook_set', inputs({ health: 'stuck', sensor_valid: true })).decision).toBe('deny');
-    expect(s.requestPermit('hook_set', inputs({ heartbeat_age_ms: 1000 })).decision).toBe('deny');
-    expect(s.requestPermit('hook_set', inputs({ supply_v: 9 })).decision).toBe('deny');
-    expect(s.requestPermit('hook_set', inputs({ state: 'SAFE_STOP' })).decision).toBe('deny');
+    expect(s.permit('hook_set', 12, 60, inputs()).permitted).toBe(false);
+    expect(s.permit('hook_set', 12, 60, inputs()).reason).toBe('deny: not armed');
+    s.update(inputs());
+    expect(s.arm(inputs()).ok).toBe(true);
+    expect(s.permit('hook_set', 12, 60, inputs()).permitted).toBe(true);
+    expect(s.permit('hook_set', 15.5, 60, inputs()).reason).toBe('deny: hook_set target 15.500 mm outside travel limits');
+    expect(s.permit('hook_set', 12, 500, inputs()).permitted).toBe(false);
+    expect(s.permit('retrieval', 2.0, 0.5, inputs()).permitted).toBe(false);
   });
-  it('never permits hook-set and retrieval simultaneously', () => {
+  it('never permits hook-set and retrieval together; enforces the hook-to-retrieval gap', () => {
     const s = new SafetyController(lim);
-    const moving = (n: 'hook_set' | 'retrieval') => ({ ...idleAct(n), status: 'moving' as const, active: true });
-    const r1 = s.requestPermit('retrieval', inputs({ state: 'HOOK_SET', hook_set: moving('hook_set') }));
-    expect(r1.decision).toBe('deny');
-    expect(r1.reason).toMatch(/simultaneous/);
-    const r2 = s.requestPermit('hook_set', inputs({ retrieval: moving('retrieval') }));
-    expect(r2.decision).toBe('deny');
-    expect(r2.reason).toMatch(/simultaneous/);
+    s.update(inputs());
+    s.arm(inputs());
+    const moving = { ...newFeedback(), active: true, status: 'moving' };
+    expect(s.permit('retrieval', 1, 0.5, inputs({ hook: moving })).reason).toBe('deny: mutual exclusion (hook_set active)');
+    expect(s.permit('hook_set', 12, 60, inputs({ retrieval: moving })).reason).toBe('deny: mutual exclusion (retrieval active)');
+    s.update(inputs({ now_ms: 0, hook: moving }));
+    s.update(inputs({ now_ms: 20 })); // hook seen idle at t=20
+    expect(s.permit('retrieval', 1, 0.5, inputs({ now_ms: 60 })).reason).toBe('deny: hook_set stopped 40 ms ago (< hook_to_retrieval_gap_ms)');
+    expect(s.permit('retrieval', 1, 0.5, inputs({ now_ms: 120 })).permitted).toBe(true);
+    expect(s.permit('retrieval', 1, 0.5, inputs({ now_ms: 120, sample: { raw: 8.5, valid: true, health: 'ok' } })).permitted).toBe(false);
   });
-  it('retrieval denied above force limit; faults latch until reset', () => {
+  it('over-tension needs 2 consecutive samples; latch tick recorded; reset only when the condition is gone', () => {
     const s = new SafetyController(lim);
-    const done = { ...idleAct('hook_set'), status: 'complete' as const };
-    expect(s.requestPermit('retrieval', inputs({ state: 'HOOK_SET', hook_set: done, tension_n: lim.retrieval_force_limit_n + 1 })).decision).toBe('deny');
-    expect(s.requestPermit('retrieval', inputs({ state: 'HOOK_SET', hook_set: done })).decision).toBe('permit');
-    const ev = s.evaluate(inputs({ tension_n: lim.hard_max_tension_n + 1 }));
-    expect(ev.critical).toBe(true);
-    expect(ev.live).toContain('OVER_TENSION');
-    expect(s.requestPermit('hook_set', inputs()).decision).toBe('deny'); // latched
-    expect(s.tryReset(inputs({ tension_n: lim.hard_max_tension_n + 1 })).ok).toBe(false);
-    expect(s.tryReset(inputs()).ok).toBe(true);
-    expect(s.requestPermit('hook_set', inputs()).decision).toBe('permit');
+    s.update(inputs());
+    s.arm(inputs());
+    const hi = { raw: lim.hard_max_tension_n + 0.5, valid: true, health: 'ok' as const };
+    expect(s.update(inputs({ now_ms: 20, sample: hi }))).toBe(0);
+    expect(faultList(s.update(inputs({ now_ms: 40, sample: hi })))).toEqual(['OVER_TENSION']);
+    expect(s.latchTimeMs('OVER_TENSION')).toBe(40);
+    expect(s.armed).toBe(false);
+    s.update(inputs({ now_ms: 60, sample: hi }));
+    expect(s.clearFaults()).toBe(false);
+    s.update(inputs({ now_ms: 80 }));
+    expect(s.clearFaults()).toBe(true);
   });
-  it('detects actuator timeout and stall', () => {
+  it('sensor faults debounce over 3 samples; comm loss latches only while armed', () => {
     const s = new SafetyController(lim);
-    const slow = { ...idleAct('hook_set'), status: 'moving' as const, active: true, elapsed_ms: lim.hook_set_timeout_ms + 20, position: 5 };
-    expect(s.liveFaults(inputs({ hook_set: slow }))).toContain('ACTUATOR_TIMEOUT');
-    const hist: Array<[number, number]> = [];
-    for (let t = 20; t <= 400; t += 20) hist.push([t, 0.3]);
-    const jam = { ...idleAct('retrieval'), status: 'jammed' as const, active: true, elapsed_ms: 400, current_a: 2.4, position: 0.3, history: hist };
-    expect(s.liveFaults(inputs({ retrieval: jam }))).toContain('MOTOR_STALL');
+    const bad = { raw: NaN, valid: false, health: 'disconnected' as const };
+    expect(s.update(inputs({ sample: bad }))).toBe(0);
+    expect(s.update(inputs({ sample: bad }))).toBe(0);
+    expect(faultList(s.update(inputs({ sample: bad })))).toEqual(['SENSOR_DISCONNECTED']);
+    const t = new SafetyController(lim);
+    expect(t.update(inputs({ now_ms: 1000, last_heartbeat_ms: 600 }))).toBe(0); // disarmed: not latched
+    expect(faultList(t.active)).toEqual(['COMM_LOSS']);
+    expect(t.arm(inputs({ now_ms: 1000, last_heartbeat_ms: 600 })).ok).toBe(false);
   });
 });
 
@@ -378,6 +392,7 @@ describe('event log integrity', () => {
 
   it('record_sha256 = sha256(canonical JSON with record_sha256 "") and the chain links + detects tampering', () => {
     const e = new HookPilotEngine({ seed: 42 });
+    e.stepN(2);
     e.arm();
     for (const s of ['bite', 'noise_current', 'rod_vibration', 'manual_handling'] as ScenarioName[]) {
       e.startScenario(s, 42);
