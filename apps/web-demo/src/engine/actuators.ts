@@ -1,112 +1,161 @@
 /**
- * Simulated actuator models (SIMULATION - no hardware). Each produces position/current feedback.
- * hook_set: linear sweep in mm with travel limit; retrieval: line wound in metres.
+ * Simulated actuator models (SIMULATION - no hardware). Line-by-line ports of the firmware host mocks
+ * (firmware/host/mocks.cpp MockHookActuator / MockRetrieval), identical to evidence_service.engine.
+ * hook_set: servo stroke in mm; retrieval: line wound in metres. Kinematic placeholders, not physics.
  */
-import type { ActuatorName } from '../../../../packages/shared-types/src/index';
-import type { ActuatorParams, SafetyLimits } from './config';
-import { DT_MS } from './config';
+import type { SimCoupling } from './config';
 
-export type ActuatorStatus = 'idle' | 'moving' | 'complete' | 'stopped' | 'jammed';
-
-export interface ActuatorTelemetry {
-  actuator: ActuatorName;
-  position: number; // mm for hook_set, m for retrieval
+export interface ActuatorFeedback {
+  /** hook set: mm of stroke; retrieval: m of line retrieved */
+  position: number;
   current_a: number;
-  status: ActuatorStatus;
-  elapsed_ms: number;
+  /** mm/s or m/s */
+  speed: number;
+  /** energised and moving toward a target */
   active: boolean;
+  at_target: boolean;
+  position_valid: boolean;
+  current_valid: boolean;
+  status: string;
 }
 
-export class SimActuator {
-  readonly name: ActuatorName;
-  position = 0;
-  current = 0;
-  status: ActuatorStatus = 'idle';
-  elapsed = 0;
+export function newFeedback(): ActuatorFeedback {
+  return { position: 0, current_a: 0, speed: 0, active: false, at_target: false, position_valid: true, current_valid: true, status: 'idle' };
+}
+
+/** Servo hook-set actuator: position (mm), slew at commanded speed, current feedback. */
+export class MockHook {
+  fb: ActuatorFeedback = newFeedback();
   private target = 0;
-  private speedPerMs = 0;
-  private jammed = false;
-  /** history of (elapsed, position) for stall detection */
-  readonly history: Array<[number, number]> = [];
+  private speed = 0;
+  private lastMs = 0;
+  private haveLast = false;
+  jam = false;
+  fbLoss = false;
+  overshoot = 0;
+  moves = 0;
+  constructor(public toleranceMm = 0.5) {}
 
-  constructor(name: ActuatorName) {
-    this.name = name;
+  moveTo(pos: number, speed: number) {
+    this.target = pos;
+    this.speed = speed;
+    this.fb.active = true;
+    this.fb.at_target = false;
+    this.fb.status = 'moving';
+    this.moves++;
   }
-
-  get active() {
-    return this.status === 'moving' || this.status === 'jammed';
-  }
-
-  start(target: number, speedPerS: number) {
-    this.position = 0;
-    this.target = target;
-    this.speedPerMs = speedPerS / 1000;
-    this.status = 'moving';
-    this.elapsed = 0;
-    this.jammed = false;
-    this.history.length = 0;
-  }
-
-  /** inject a mechanical jam (scenario motor_stall) */
-  jam() {
-    if (this.active) this.jammed = true;
-  }
-
   stop() {
-    if (this.active) this.status = 'stopped';
-    this.current = 0;
+    this.fb.active = false;
+    this.fb.speed = 0;
+    this.fb.current_a = 0;
+    if (this.fb.status !== 'idle') this.fb.status = 'stopped';
   }
-
-  idle() {
-    this.status = 'idle';
-    this.current = 0;
-    this.position = 0;
-    this.elapsed = 0;
-    this.history.length = 0;
-  }
-
-  /** advance one tick; lineTensionN is the measured tension (load) */
-  step(lineTensionN: number, travelLimit: number) {
-    if (!this.active) {
-      this.current = 0;
+  update(now: number) {
+    const dt = this.haveLast ? (now - this.lastMs) / 1000.0 : 0.0;
+    this.lastMs = now;
+    this.haveLast = true;
+    const fb = this.fb;
+    fb.position_valid = !this.fbLoss;
+    if (!fb.active) {
+      fb.current_a = 0.05;
+      fb.speed = 0;
       return;
     }
-    this.elapsed += DT_MS;
-    const load = Number.isFinite(lineTensionN) ? Math.max(0, lineTensionN) : 0;
-    if (this.jammed) {
-      this.status = 'jammed';
-      // current ramps toward stall current while position does not advance
-      this.current = Math.min(2.6, this.current + 0.12);
-    } else {
-      this.position = Math.min(this.target, this.position + this.speedPerMs * DT_MS, travelLimit);
-      this.current = (this.name === 'hook_set' ? 0.5 : 0.3) + (this.name === 'hook_set' ? 0.08 : 0.15) * load;
-      if (this.position >= this.target) {
-        this.status = 'complete';
-        this.current = 0.05;
-      }
+    if (this.jam) {
+      fb.speed = 0;
+      fb.current_a = 1.6;
+      fb.status = 'jammed';
+      return;
     }
-    this.history.push([this.elapsed, this.position]);
-    if (this.history.length > 50) this.history.shift();
+    const dir = this.target >= fb.position ? 1.0 : -1.0;
+    const step = this.speed * dt;
+    const remaining = Math.abs(this.target - fb.position);
+    if (this.overshoot > 0 && this.target > 0) {
+      fb.position += step;
+      if (fb.position >= this.target + this.overshoot) fb.position = this.target + this.overshoot;
+    } else if (step >= remaining) {
+      fb.position = this.target;
+    } else {
+      fb.position += dir * step;
+    }
+    fb.speed = this.speed;
+    fb.current_a = 0.8;
+    if (Math.abs(fb.position - this.target) <= this.toleranceMm && this.overshoot <= 0) {
+      fb.active = false;
+      fb.at_target = true;
+      fb.speed = 0;
+      fb.current_a = 0.1;
+      fb.status = 'at_target';
+    }
+  }
+}
+
+/** DC motor + encoder + current-sense retrieval: position (m of line), current (A). */
+export class MockRetrieval {
+  fb: ActuatorFeedback = newFeedback();
+  private target = 0;
+  private speed = 0;
+  loadN = 0;
+  private lastMs = 0;
+  private haveLast = false;
+  stall = false;
+  encLoss = false;
+  runaway = false;
+  starts = 0;
+  private baseA: number;
+  private perNA: number;
+  constructor(c: SimCoupling) {
+    this.baseA = c.retrieval_current_base_a;
+    this.perNA = c.retrieval_current_per_n_a;
   }
 
-  /** extra line tension (N) this actuator adds while moving */
-  lineLoad(p: ActuatorParams): number {
-    if (this.status !== 'moving' && this.status !== 'jammed') return 0;
-    return this.name === 'hook_set' ? p.hook_set_line_load_n : p.retrieval_line_load_n;
+  start(target: number, speed: number) {
+    this.target = target;
+    this.speed = speed;
+    this.fb.active = true;
+    this.fb.at_target = false;
+    this.fb.status = 'retrieving';
+    this.starts++;
   }
-
-  telemetry(): ActuatorTelemetry {
-    return {
-      actuator: this.name,
-      position: this.position,
-      current_a: this.current,
-      status: this.status,
-      elapsed_ms: this.elapsed,
-      active: this.active,
-    };
+  stop() {
+    this.fb.active = false;
+    this.fb.speed = 0;
+    this.fb.current_a = 0;
+    if (this.fb.status !== 'idle' && this.fb.status !== 'at_target') this.fb.status = 'stopped';
   }
-
-  travelLimit(lim: SafetyLimits): number {
-    return this.name === 'hook_set' ? lim.hook_set_travel_limit_mm : Number.POSITIVE_INFINITY;
+  resetPosition() {
+    this.fb.position = 0;
+  }
+  update(now: number) {
+    const dt = this.haveLast ? (now - this.lastMs) / 1000.0 : 0.0;
+    this.lastMs = now;
+    this.haveLast = true;
+    const fb = this.fb;
+    fb.position_valid = !this.encLoss;
+    if (!fb.active) {
+      fb.current_a = 0;
+      fb.speed = 0;
+      return;
+    }
+    if (this.stall) {
+      fb.speed = 0;
+      fb.current_a = 2.5;
+      fb.status = 'stalled';
+      return;
+    }
+    const step = this.speed * dt;
+    if (!this.runaway && fb.position + step >= this.target) {
+      fb.position = this.target;
+      fb.active = false;
+      fb.at_target = true;
+      fb.speed = 0;
+      fb.current_a = 0;
+      fb.status = 'at_target';
+      return;
+    }
+    if (!this.encLoss) fb.position += step;
+    fb.speed = this.speed;
+    fb.current_a = this.baseA + this.perNA * Math.max(0.0, this.loadN);
+    fb.status = 'retrieving';
   }
 }
