@@ -4,3 +4,4 @@ firmware/build/
 .mock-konnex/
 *.zip
 .env
+apps/web-demo/tests/fixtures/python_reference.json
