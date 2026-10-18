@@ -1,4 +1,16 @@
-/** SignalProcessor: per-sample feature extraction + sensor health checks (pure TS, no I/O). */
+/**
+ * SignalProcessor: per-sample feature extraction + sensor health checks (pure TS, no I/O).
+ *
+ * Line-by-line port of firmware BaselineSignalProcessor (firmware/src/core/signal_processor.cpp),
+ * identical to evidence_service.classifier.FwProcessor:
+ *  - health: non-finite -> disconnected; raw < sensor_min_n or raw >= sensor_max_n -> out_of_range;
+ *    stuck_samples bit-identical consecutive readings -> stuck.
+ *  - only valid samples update x / smoothed / baseline and the 64-sample history; invalid samples
+ *    hold the previous values (features are still computed from the history).
+ *  - rate = (smoothed[newest] - smoothed[newest-lag]) / (lag * dt), 0 until lag+1 valid samples exist.
+ *  - variance = population variance of the last variance_window_samples valid x values;
+ *    detrended = x - mean(last detrend_window_samples valid x values).
+ */
 import type { SensorHealth } from '../../../../packages/shared-types/src/index';
 import type { ClassifierThresholds, SafetyLimits } from './config';
 import { DT_MS } from './config';
@@ -19,17 +31,20 @@ export interface SampleFeatures {
   detrended: number;
 }
 
+const K = 64; // firmware kMaxWindow
+
 export class SignalProcessor {
   private th: ClassifierThresholds;
   private lim: SafetyLimits;
   private initialized = false;
-  private baseline = 0;
+  private x = 0;
   private smoothed = 0;
-  private smoothHist: number[] = [];
-  private window: number[] = [];
-  private detrendWin: number[] = [];
-  private lastRaw = NaN;
-  private identicalRun = 0;
+  private baseline = 0;
+  private xs: number[] = [];
+  private ss: number[] = [];
+  private lastRaw = 0;
+  private haveLastRaw = false;
+  private identical = 0;
   private last: SampleFeatures | null = null;
 
   constructor(th: ClassifierThresholds, lim: SafetyLimits) {
@@ -44,11 +59,12 @@ export class SignalProcessor {
 
   reset() {
     this.initialized = false;
-    this.smoothHist = [];
-    this.window = [];
-    this.detrendWin = [];
-    this.lastRaw = NaN;
-    this.identicalRun = 0;
+    this.x = this.smoothed = this.baseline = 0;
+    this.xs = [];
+    this.ss = [];
+    this.lastRaw = 0;
+    this.haveLastRaw = false;
+    this.identical = 0;
     this.last = null;
   }
 
@@ -56,84 +72,77 @@ export class SignalProcessor {
     return this.last;
   }
 
+  private health(v: number): SensorHealth {
+    if (!Number.isFinite(v)) {
+      this.haveLastRaw = false;
+      this.identical = 0;
+      return 'disconnected';
+    }
+    if (v < this.lim.sensor_min_n || v >= this.lim.sensor_max_n) return 'out_of_range';
+    if (this.haveLastRaw && v === this.lastRaw) this.identical++;
+    else this.identical = 1;
+    this.lastRaw = v;
+    this.haveLastRaw = true;
+    if (this.identical >= this.lim.stuck_samples) return 'stuck';
+    return 'ok';
+  }
+
   update(tMs: number, raw: number, freezeBaseline: boolean): SampleFeatures {
     const th = this.th;
-    // ---- health checks ----
-    let health: SensorHealth = 'ok';
-    if (!Number.isFinite(raw)) {
-      health = 'disconnected';
-      this.identicalRun = 0;
-    } else {
-      if (raw === this.lastRaw) this.identicalRun++;
-      else this.identicalRun = 1;
-      if (raw < this.lim.sensor_min_n || raw > this.lim.sensor_max_n) health = 'out_of_range';
-      else if (this.identicalRun >= this.lim.stuck_samples) health = 'stuck';
-    }
-    this.lastRaw = raw;
+    const vw0 = Math.max(2, Math.min(th.variance_window_samples, K));
+    const dw0 = Math.max(1, Math.min(th.detrend_window_samples, K));
+    const lag = Math.max(1, Math.min(th.rate_lag_samples, K - 1));
 
-    if (health !== 'ok' || !this.initialized) {
-      if (health === 'ok' && !this.initialized) {
+    const health = this.health(raw);
+    const valid = health === 'ok' || health === 'degraded';
+    if (valid) {
+      if (!this.initialized) {
+        this.x = this.smoothed = this.baseline = raw;
         this.initialized = true;
-        this.baseline = raw;
-        this.smoothed = raw;
-      } else if (health !== 'ok') {
-        // hold previous features, mark invalid
-        const prev = this.last;
-        const f: SampleFeatures = {
-          t_ms: tMs,
-          raw,
-          valid: false,
-          health,
-          x: prev ? prev.x : 0,
-          smoothed: prev ? prev.smoothed : 0,
-          baseline: prev ? prev.baseline : 0,
-          baselineFrozen: freezeBaseline,
-          delta: prev ? prev.delta : 0,
-          rate: 0,
-          variance: prev ? prev.variance : 0,
-          detrended: 0,
-        };
-        this.last = f;
-        return f;
+      } else {
+        this.x = raw;
+        this.smoothed += th.smoothing_alpha * (raw - this.smoothed);
+        if (!freezeBaseline) this.baseline += th.baseline_alpha * (raw - this.baseline);
+      }
+      this.xs.push(this.x);
+      this.ss.push(this.smoothed);
+      if (this.xs.length > K) {
+        this.xs.shift();
+        this.ss.shift();
       }
     }
-
-    const x = raw;
-    if (!freezeBaseline) this.baseline += th.baseline_alpha * (x - this.baseline);
-    this.smoothed += th.smoothing_alpha * (x - this.smoothed);
-    this.smoothHist.push(this.smoothed);
-    if (this.smoothHist.length > th.rate_lag_samples + 1) this.smoothHist.shift();
-    const lagN = this.smoothHist.length - 1;
-    const rate = lagN > 0 ? ((this.smoothed - this.smoothHist[0]) / (lagN * DT_MS)) * 1000 : 0;
-
-    this.window.push(x);
-    if (this.window.length > th.variance_window_samples) this.window.shift();
-    let mean = 0;
-    for (const v of this.window) mean += v;
-    mean /= this.window.length;
-    let variance = 0;
-    for (const v of this.window) variance += (v - mean) * (v - mean);
-    variance /= this.window.length;
-
-    this.detrendWin.push(x);
-    if (this.detrendWin.length > th.detrend_window_samples) this.detrendWin.shift();
-    let dm = 0;
-    for (const v of this.detrendWin) dm += v;
-    dm /= this.detrendWin.length;
-
+    const n = this.xs.length;
+    const rate = n > lag ? (this.ss[n - 1] - this.ss[n - 1 - lag]) / (lag * (DT_MS / 1000.0)) : 0.0;
+    const vw = Math.min(vw0, n);
+    let variance = 0.0;
+    if (vw >= 2) {
+      let m = 0.0;
+      for (let k = n - vw; k < n; k++) m += this.xs[k];
+      m /= vw;
+      let acc = 0.0;
+      for (let k = n - vw; k < n; k++) acc += (this.xs[k] - m) * (this.xs[k] - m);
+      variance = acc / vw;
+    }
+    const dw = Math.min(dw0, n);
+    let detrended = 0.0;
+    if (dw >= 1) {
+      let m = 0.0;
+      for (let k = n - dw; k < n; k++) m += this.xs[k];
+      detrended = this.x - m / dw;
+    }
     const f: SampleFeatures = {
       t_ms: tMs,
       raw,
-      valid: true,
+      valid,
       health,
-      x,
+      x: this.x,
       smoothed: this.smoothed,
       baseline: this.baseline,
       baselineFrozen: freezeBaseline,
-      delta: x - this.baseline,
+      delta: this.initialized ? this.x - this.baseline : 0.0,
       rate,
       variance,
-      detrended: x - dm,
+      detrended,
     };
     this.last = f;
     return f;
