@@ -6,3 +6,5 @@ firmware/build/
 .env
 apps/web-demo/tests/fixtures/python_reference.json
 apps/web-demo/tests/fixtures/engine_reference.json
+apps/web-demo/dist/
+apps/web-demo/hookpilot-demo-standalone.html
