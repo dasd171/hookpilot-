@@ -3,6 +3,8 @@
 #
 #   make test                         build + run unit tests
 #   make sim SCENARIO=bite SEED=42    print event JSON lines for one synthetic scenario
+#   make sim SCENARIO=motor_stall SEED=3 TRACE=build/trace.jsonl [DISARMED=1] [INJECT=estop@retrieval+60]
+#            [SET=retrieval_force_limit_n=6]   ... plus one JSON tick-trace line per tick in TRACE
 #   make verify                       validate sim output against the JSON schema + hashes (python3)
 #
 # No system g++ is assumed; default compiler is zig's clang via pip's ziglang.
@@ -39,6 +41,11 @@ HEADERS := $(wildcard include/hookpilot/*.h) $(wildcard host/*.h) $(wildcard tes
 SCENARIO ?= bite
 SEED ?= 42
 DURATION ?= 8000
+TRACE ?=
+DISARMED ?=
+INJECT ?=
+SET ?=
+SIM_FLAGS := $(if $(TRACE),--trace $(TRACE)) $(if $(DISARMED),--disarmed) $(foreach i,$(INJECT),--inject $(i)) $(foreach s,$(SET),--set $(s))
 
 .PHONY: all test sim sim-all verify clean
 
@@ -58,7 +65,7 @@ test: $(BUILD)/hookpilot_tests
 	./$(BUILD)/hookpilot_tests
 
 sim: $(BUILD)/hookpilot_sim
-	@./$(BUILD)/hookpilot_sim --scenario $(SCENARIO) --seed $(SEED) --duration $(DURATION)
+	@./$(BUILD)/hookpilot_sim --scenario $(SCENARIO) --seed $(SEED) --duration $(DURATION) $(SIM_FLAGS)
 
 # All scenarios for one seed -> build/sim_<scenario>_<seed>.jsonl
 sim-all: $(BUILD)/hookpilot_sim
