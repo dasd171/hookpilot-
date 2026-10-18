@@ -380,7 +380,7 @@ export function App() {
               ))}
             </div>
             <p className="muted small" style={{ marginBottom: 0 }}>
-              Noise, vibration and handling scenarios must never command an actuator. Arm first to see the full hook-set / retrieval cycle; while disarmed, detections are logged and every actuation is denied.
+              Noise, vibration and handling scenarios must never command an actuator. Arm first to see the full hook-set / retrieval cycle (a completed cycle ends disarmed, like the firmware: re-arm for the next one); while disarmed, detections are logged as observation only and nothing is requested.
             </p>
           </section>
 
