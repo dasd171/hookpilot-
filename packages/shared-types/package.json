@@ -1,0 +1,9 @@
+{
+  "name": "@hookpilot/shared-types",
+  "private": true,
+  "version": "1.0.0",
+  "description": "TypeScript types mirroring packages/event-schema/hookpilot-event.schema.json (schema 1.0.0) and the shared state-machine contract.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}
