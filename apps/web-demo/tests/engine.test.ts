@@ -91,7 +91,8 @@ const EXPECT: Record<ScenarioName, { result: string; decision: string; fault?: s
   rod_vibration: { result: 'rejected_vibration', decision: 'deny', actuates: false, final: 'MONITOR' },
   manual_handling: { result: 'rejected_manual_handling', decision: 'deny', actuates: false, final: 'MONITOR' },
   excessive_tension: { result: 'bite_candidate_confirmed', decision: 'safe_stop', fault: 'OVER_TENSION', actuates: true, final: 'SAFE_STOP' },
-  sensor_failure: { result: 'rejected_sensor_fault', decision: 'safe_stop', fault: 'SENSOR_STUCK', actuates: false, final: 'SAFE_STOP' },
+  // fault depends on the drawn mode (stuck | out_of_range), checked below
+  sensor_failure: { result: 'rejected_sensor_fault', decision: 'safe_stop', actuates: false, final: 'SAFE_STOP' },
   comm_loss: { result: 'bite_candidate_confirmed', decision: 'safe_stop', fault: 'COMM_LOSS', actuates: true, final: 'SAFE_STOP' },
   motor_stall: { result: 'bite_candidate_confirmed', decision: 'safe_stop', fault: 'MOTOR_STALL', actuates: true, final: 'SAFE_STOP' },
 };
@@ -110,6 +111,11 @@ describe('scenario classification (armed, fixed seeds)', () => {
         expect(r.classification.rule_trace!.length).toBeGreaterThan(0);
         expect(r.safety.decision).toBe(exp.decision);
         if (exp.fault) expect(r.safety.faults).toContain(exp.fault);
+        if (s === 'sensor_failure') {
+          const mode = generateScenario(s, seed).params.mode;
+          expect(r.safety.faults).toContain(mode === 'stuck' ? 'SENSOR_STUCK' : 'SENSOR_OUT_OF_RANGE');
+        }
+        expect(r.source.generator).toBe('hookpilot-synth-v1');
         expect((r.actuation.requested ?? []).length > 0).toBe(exp.actuates);
         expect(r.outcome.final_state).toBe(exp.final);
         expect(r.outcome.milestones.fish_landed).toBe('unknown');
@@ -212,17 +218,31 @@ describe('state machine', () => {
 // ---------------------------------------------------------------- detector unit
 describe('BiteDetector rules', () => {
   const th = defaultConfig().classifier;
-  const base = { baseline_n: 0.6, peak_delta_n: 2.5, max_rate_n_per_s: 20, duration_above_ms: 300, short_term_variance: 0.1, oscillation_count: 1, sensor_health: 'ok' as const };
+  const base = { baseline_n: 0.6, peak_delta_n: 2.5, max_rate_n_per_s: 20, duration_above_ms: 300, continuous_above_ms: 300, short_term_variance: 0.1, oscillation_count: 1, sensor_health: 'ok' as const };
   it('each rule maps to its rejection', () => {
     expect(classify(base, th).result).toBe('bite_candidate_confirmed');
     expect(classify({ ...base, sensor_health: 'disconnected' }, th).result).toBe('rejected_sensor_fault');
-    expect(classify({ ...base, peak_delta_n: 15 }, th).result).toBe('rejected_manual_handling');
+    expect(classify({ ...base, peak_delta_n: th.manual_handling_delta_n + 0.5 }, th).result).toBe('rejected_manual_handling');
     expect(classify({ ...base, duration_above_ms: 9000 }, th).result).toBe('rejected_manual_handling');
     expect(classify({ ...base, oscillation_count: 9 }, th).result).toBe('rejected_vibration');
     expect(classify({ ...base, max_rate_n_per_s: 1.5 }, th).result).toBe('rejected_noise');
-    expect(classify({ ...base, duration_above_ms: 80 }, th).result).toBe('rejected_transient');
-    const c = classify(base, th);
-    expect(c.rule_trace[c.rule_trace.length - 1]).toBe('=> bite_candidate_confirmed');
+    expect(classify({ ...base, continuous_above_ms: 80 }, th).result).toBe('rejected_transient');
+    // firmware rule order: rate (R4) is checked before the transient rule (R5)
+    expect(classify({ ...base, continuous_above_ms: 80, max_rate_n_per_s: 1.5 }, th).result).toBe('rejected_noise');
+    const c = classify(base, th, 600);
+    expect(c.rule_trace[0]).toBe('window: 600 ms observed after trigger (decision_window_ms=600)');
+    expect(c.rule_trace[c.rule_trace.length - 1]).toBe('ALL rules pass -> bite_candidate_confirmed (thresholds provisional)');
+  });
+  it('defaults are the firmware defaults and stay labelled provisional', () => {
+    const c = defaultConfig();
+    expect(c.classifier.decision_window_ms).toBe(600);
+    expect(c.classifier.min_rate_n_per_s).toBe(2.0);
+    expect(c.classifier.manual_handling_delta_n).toBe(5.0);
+    expect(c.classifier.baseline_alpha).toBe(0.002);
+    expect(c.safety.sensor_max_n).toBe(49.9);
+    const r = runScenario('bite', 42).events[0];
+    expect(r.classification.thresholds!.status).toBe('provisional - derive from calibration + labeled data');
+    expect(r.classification.thresholds!.decision_window_ms).toBe(600);
   });
   it('short spike through processor + detector is rejected_transient', () => {
     const cfg = defaultConfig();
@@ -239,12 +259,14 @@ describe('BiteDetector rules', () => {
     }
     expect(decision?.result).toBe('rejected_transient');
   });
-  it('processor health: NaN -> disconnected, >max -> out_of_range, repeats -> stuck', () => {
+  it('processor health: NaN -> disconnected, >=max -> out_of_range, repeats -> stuck', () => {
     const cfg = defaultConfig();
     const p = new SignalProcessor(cfg.classifier, cfg.safety);
     expect(p.update(0, 0.5, false).health).toBe('ok');
     expect(p.update(20, NaN, false).health).toBe('disconnected');
     expect(p.update(40, 60, false).health).toBe('out_of_range');
+    expect(p.update(60, cfg.safety.sensor_max_n, false).health).toBe('out_of_range'); // >= bound (firmware)
+    expect(p.update(80, 49.99, false).health).toBe('out_of_range'); // synth saturation value
     let h = 'ok';
     for (let k = 0; k < 20; k++) h = p.update(60 + k * 20, 0.7, false).health;
     expect(h).toBe('stuck');
