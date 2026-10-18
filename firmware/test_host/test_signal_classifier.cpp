@@ -209,7 +209,15 @@ TEST(classifier, each_scenario_fixed_seed) {
     CHECK_EQ(firstResult(res), expectedClassification(sc));
   }
   auto idle = sim::runScenario("idle", 42);
-  CHECK(idle.lines.empty());  // no candidate -> no record (no_event is not logged per tick)
+  // no candidate -> exactly one end-of-window no_event summary record (never one per tick)
+  CHECK_EQ(idle.lines.size(), size_t(1));
+  CHECK_EQ(firstResult(idle), std::string("no_event"));
+  {
+    Json j;
+    parseJson(idle.lines.front(), j);
+    CHECK_EQ(th::field(j, {"outcome", "stop_reason"}), std::string("no_event: nothing to actuate"));
+    CHECK_EQ(th::field(j, {"outcome", "final_state"}), std::string("MONITOR"));
+  }
   CHECK(idle.final_state == State::MONITOR);
   // a second fixed seed per scenario
   const std::map<std::string, uint32_t> seeds = {{"bite", 7},           {"noise_current", 7},  {"rod_vibration", 7},
