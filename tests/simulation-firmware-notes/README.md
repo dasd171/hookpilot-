@@ -25,7 +25,9 @@ Scenarios: `idle bite noise_current rod_vibration manual_handling sensor_failure
 * `idle` emits no records. A record is only written per candidate cycle, per fault while monitoring,
   and per watchdog-reset boot.
 
-## Firmware-specific provisional thresholds (differ from apps/web-demo config.ts)
+## Provisional thresholds (shared by firmware, Python and apps/web-demo since 2026-10-18)
 `min_rate_n_per_s` 2.0, `manual_handling_delta_n` 5.0, `baseline_alpha` 0.002, `decision_window_ms` 600,
 `sensor_max_n` 49.9 (≥ is out of range, so the synth's 49.99 N saturation is flagged `SENSOR_OUT_OF_RANGE`).
 These are all placeholders. Every record carries the thresholds it used in `classification.thresholds`.
+Firmware records also carry `source.generator` ("hookpilot-synth-v1" from the sim harness) and
+`features.continuous_above_ms`, the same fields as Python and web-demo records.
