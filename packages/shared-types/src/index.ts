@@ -74,6 +74,8 @@ export interface HookPilotEvent {
     scenario?: string;
     seed?: number;
     ground_truth_label?: string | null;
+    /** synthetic generator id, e.g. "hookpilot-synth-v1" (same field in firmware, Python and web records) */
+    generator?: string;
   };
   timestamp: {
     start_utc: string;
@@ -99,6 +101,7 @@ export interface HookPilotEvent {
     peak_delta_n?: number;
     max_rate_n_per_s?: number;
     duration_above_ms?: number;
+    continuous_above_ms?: number;
     short_term_variance?: number;
     oscillation_count?: number;
     sensor_health?: SensorHealth;
@@ -108,7 +111,10 @@ export interface HookPilotEvent {
     reason: string;
     rule_trace?: string[];
     classifier?: string;
+    implementation?: string;
     thresholds?: Record<string, number | string>;
+    decision_t_ms?: number;
+    trigger_t_ms?: number;
   };
   safety: {
     decision: SafetyDecision;
