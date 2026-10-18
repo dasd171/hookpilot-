@@ -59,12 +59,13 @@ Shared rules: `../docs/SHARED_CONTRACT.md`. Event format:
 |---|---|---|
 | boot (any reset, incl. watchdog) | outputs off | `IDLE`, disarmed. After a watchdog reset `WATCHDOG_RESET` is latched and a boot record logged; arming is refused until an operator `RESET` acknowledges it. |
 | `IDLE` | operator ARM + safety `arm()` ok | `MONITOR` |
+| `IDLE` | (disarmed) `delta >= trigger_delta_n` | `CANDIDATE`, observation only: a confirmed bite is logged as `disarmed_observation_only`, nothing is requested (`observe_when_disarmed`, default on) |
 | `MONITOR` | `delta >= trigger_delta_n` (and re-armed after the previous decision) | `CANDIDATE` (baseline frozen) |
 | `CANDIDATE` | decision window elapsed, or early exit (delta > manual threshold) | `CONFIRM` |
 | `CONFIRM` | `bite_candidate_confirmed` **and** safety permits hook set | `HOOK_SET` |
 | `CONFIRM` | any rejection | `MONITOR` (record logged, baseline unfrozen, re-arm wait) |
 | `CONFIRM` | `rejected_sensor_fault` | `SAFE_STOP` |
-| `HOOK_SET` | stroke reached target; safety permits retrieval (hook idle → mutual exclusion) | `RETRIEVE` |
+| `HOOK_SET` | stroke reached target, then `hook_to_retrieval_gap_ms` (100 ms, provisional) elapsed; safety permits retrieval (hook idle → mutual exclusion; the safety controller also denies inside the gap) | `RETRIEVE` |
 | `HOOK_SET` | retrieval denied | `SAFE_STOP` |
 | `RETRIEVE` | travel target reached → motor stopped | `VERIFY` (hook returned to rest, gated) |
 | `VERIFY` | `verify_ms` elapsed, hook idle | `IDLE` (disarmed; `fish_landed` stays `"unknown"`) |
@@ -88,7 +89,8 @@ the gate re-checks mutual exclusion from live feedback (defense in depth). `stop
 | Travel limits | hook 0–15 mm (commands outside denied; feedback outside → fault); retrieval ≤ 1.5 m | `TRAVEL_LIMIT` |
 | Stall | < 5 mm progress in 200 ms with current ≥ 1.8 A (after 200 ms grace), or < 5 mm in 600 ms regardless of current (encoder loss) | `MOTOR_STALL` |
 | Hook-set and retrieval active together | must never happen | `INTERLOCK` |
-| Comm heartbeat | > 300 ms without heartbeat (latched only while armed; always blocks arming) | `COMM_LOSS` |
+| Comm heartbeat | link down, or > 300 ms without heartbeat (latched only while armed; always blocks arming) | `COMM_LOSS` |
+| Hook-to-retrieval gap | retrieval request denied < 100 ms after the hook-set stroke ended | (deny only) |
 | Undervoltage (3S Li-ion) | < 10.5 V for 200 ms; arming needs ≥ 10.8 V | `UNDERVOLTAGE` |
 | Over-temperature | > 70 °C | `OVER_TEMP` |
 | Watchdog reset | boot cause | `WATCHDOG_RESET` (IDLE, needs acknowledgement) |
@@ -122,7 +124,10 @@ escaping). `integrity.record_sha256` = sha256 over the record with `record_sha25
 SHA-256, FIPS 180-4 vectors tested), `prev_record_sha256` chains records, `signature` = null
 (there is no secure element). `fish_landed` is always `"unknown"`. Host output has `source.mode = "simulation"`,
 `clock_quality = "host_clock_simulated"`, a simulated epoch of 2026-01-01T00:00:00Z, and `actuation.simulated = true`.
-Samples are rounded to 0.1 mN. Non-finite readings are left out of `samples` and counted in
+Samples and feedback are written at full double precision (no rounding since 2026-10-18, so records equal the
+Python / web-demo ports). Every request carries its safety `decision` / `decision_reason`;
+`safety.fault_latched_t_ms` gives each latched fault's tick; `classification.trigger_t_ms` / `decision_t_ms`
+are set for candidates; the rule trace starts with the `t=… TRIGGER …` line. Non-finite readings are left out of `samples` and counted in
 `sensor_data.invalid_samples_omitted`. `interlocks` is a snapshot from the tick the record closed,
 taken before actuators were stopped.
 
@@ -138,6 +143,9 @@ Requirements: `make` and a C++17 compiler. The default is zig's clang (`pip inst
 cd firmware
 make test                          # builds + runs all unit tests (exit code != 0 on failure)
 make sim SCENARIO=bite SEED=42     # event JSON lines on stdout, state transitions on stderr
+make sim SCENARIO=motor_stall SEED=3 TRACE=build/trace.jsonl   # + per-tick trace lines (docs/engine-spec.md §8)
+make sim SCENARIO=bite SEED=1 DISARMED=1 INJECT=estop@retrieval+60 SET=hook_to_retrieval_gap_ms=0
+./build/hookpilot_sim --scenario bite --seed 1 --trace - --quiet   # trace to stderr ('-'), records to stdout
 make sim-all SEED=7                # every scenario -> build/sim_<scenario>_7.jsonl
 make verify SEED=42                # sim-all + schema + hash + chain check (python3, jsonschema)
 ./build/hookpilot_sim --list       # scenarios: idle bite noise_current rod_vibration manual_handling
@@ -151,7 +159,11 @@ caused `SIGILL` at `-O2`.
 Synthetic signals come from `hookpilot-synth-v1` (C++ port of
 `services/evidence-service/evidence_service/synth.py`), seeded with mulberry32. The PRNG matches the
 TS/Python reference bit for bit (vectors are in the tests), and the generated samples match Python to 1e-9.
-`motor_stall` / `comm_loss` faults are injected `fault_after_retrieval_start_ms` after RETRIEVE begins.
+`motor_stall` / `comm_loss` faults are injected `fault_after_retrieval_start_ms` after RETRIEVE begins
+(`comm_loss` = heartbeats stop while the link still reports up). The host rig (`host/sim_harness.cpp`) is the
+normative engine model of `docs/engine-spec.md`: line load, injection timing (`--inject kind@t|retrieval+ms[:v]`),
+parameter overrides (`--set name=value`) and the end-of-window handling. The Python and web-demo engines are
+ports of it and are compared tick for tick (`tests/integration/test_cross_impl.py`).
 
 ---
 
@@ -233,7 +245,11 @@ excessive tension, motor stall, encoder loss, comm loss, undervoltage, e-stop, o
 watchdog reset), fault recovery (reset only when cleared, then a new successful cycle with a valid hash
 chain), determinism, SHA-256/canonical-JSON/PRNG/synth reference vectors, calibration math, and pin-map sanity.
 
-Last run on the build host: see the parent report. `make test` prints the real totals.
+`test_engine_unified.cpp` adds the 2026-10-18 engine contract: hook-to-retrieval gap, disarmed observation,
+heartbeat-timeout comm loss timing, injection parser, TRIGGER trace line, end-of-window disarm of an open
+candidate, per-tick trace and full-precision records.
+
+Last run on 2026-10-18: 53 tests, 53 passed; 574 checks. `make test` prints the real totals.
 
 ## 5. Hardware assumptions and what is NOT tested on real hardware
 
@@ -254,12 +270,13 @@ Known limitations:
 * Classifier misses on synthetic data: in seeds 1–100, 86/100 `bite` runs are confirmed. The misses are
   bites whose amplitude falls below the 1 N trigger, short holds, or slow rises, all within the generator's
   ranges. `noise_current` (26/100) and `rod_vibration` (18/100) sometimes never reach the trigger, so they
-  produce no record instead of the expected rejection. There were zero false bite confirmations across the
+  produce only the end-of-window `no_event` summary instead of the expected rejection. There were zero false bite confirmations across the
   500 non-bite runs.
 * `CONFIRM` is resolved in the same tick as the end of the decision window, so it is a transient state.
 * The decision latency is 600 ms after the trigger (the observation window). This is a placeholder.
 * No secure element: `integrity.signature` is null, and the hash chain lives only in RAM (it restarts on reboot).
-* `idle` produces no records, because `no_event` is only logged when a fault occurs while monitoring.
+* A run that logs nothing (e.g. `idle`) ends with one `no_event` summary record (pre-roll samples), so every
+  run is auditable; `no_event` is never logged per tick.
 * AddressSanitizer is not available in the zig toolchain used here. UBSan was run on the test suite
   without findings. Only the `printf` fallback of the shortest-number formatter has been exercised;
   this libc++ does not advertise floating `to_chars`.
