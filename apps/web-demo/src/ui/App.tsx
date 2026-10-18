@@ -499,7 +499,8 @@ export function App() {
 
         <p className="foot">
           SIMULATION ONLY. All tension values, actuator positions and currents are synthetic and generated in your browser from (scenario, seed) with the
-          mulberry32 PRNG. Thresholds and limits are provisional placeholders, not validated values. Nothing here controls a real rod, reel, motor or sensor.
+          shared hookpilot-synth-v1 generator (mulberry32 PRNG) and classified with the same deterministic-baseline-v1 rules and default thresholds as the
+          firmware and the Python evidence service. Thresholds and limits are provisional placeholders, not validated values. Nothing here controls a real rod, reel, motor or sensor.
           Konnex integration is not implemented in this demo.
         </p>
       </div>
