@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HookPilot | Smart Fishing Prototype Demo</title>
+<style>
+:root{--bg:#0b1220;--panel:#121d30;--panel2:#18263c;--text:#eef5ff;--muted:#9db0ca;--line:#2b3d58;--green:#4ee0a0;--amber:#ffcc66;--red:#ff7777;--blue:#7bb8ff}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 15% 0%,#18324b 0,transparent 34%),var(--bg);color:var(--text);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
+.wrap{max-width:1180px;margin:auto;padding:28px 18px 48px}.top{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:24px}.brand{display:flex;gap:12px;align-items:center}.logo{width:46px;height:46px;border-radius:14px;background:linear-gradient(135deg,#4ee0a0,#7bb8ff);display:grid;place-items:center;color:#081320;font-size:23px;font-weight:900}.eyebrow{color:var(--green);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.title{font-size:clamp(28px,4vw,42px);font-weight:800;letter-spacing:-.04em;margin:2px 0}.subtitle{color:var(--muted);max-width:700px}.pill{border:1px solid var(--line);padding:7px 11px;border-radius:999px;color:var(--muted);font-size:12px}.grid{display:grid;grid-template-columns:1.15fr .85fr;gap:16px}.card{background:linear-gradient(180deg,rgba(24,38,60,.96),rgba(18,29,48,.96));border:1px solid var(--line);border-radius:18px;padding:19px;box-shadow:0 12px 40px #0002}.card h2{font-size:16px;margin:0 0 14px}.row{display:flex;align-items:center;justify-content:space-between;gap:12px}.muted{color:var(--muted)}.metric{font-size:34px;font-weight:800;letter-spacing:-.04em}.unit{font-size:13px;color:var(--muted);font-weight:500}.status{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;background:#26344a;color:var(--muted)}.dot{width:7px;height:7px;border-radius:50%;background:currentColor}.status.good{background:#153b35;color:var(--green)}.status.warn{background:#40351f;color:var(--amber)}.status.bad{background:#402629;color:var(--red)}.chart{height:185px;width:100%;display:block;background:#0b1525;border-radius:12px;border:1px solid #253650}.controls{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.btn{border:1px solid var(--line);border-radius:11px;padding:11px 13px;background:#22334b;color:var(--text);font-weight:700;cursor:pointer}.btn:hover{filter:brightness(1.12)}.btn.primary{background:var(--green);color:#062019;border-color:transparent}.btn.danger{background:#44252a;color:#ffb6b6;border-color:#704047}.btn:disabled{opacity:.4;cursor:not-allowed}.stage{display:flex;gap:9px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:12px;margin-bottom:9px}.stage.active{border-color:#4ee0a0;background:#15362f}.stage .num{width:25px;height:25px;flex:0 0 25px;border-radius:8px;background:#263750;display:grid;place-items:center;font-size:12px;font-weight:800}.stage.active .num{background:var(--green);color:#062019}.stage strong{display:block;font-size:13px}.stage small{color:var(--muted)}.bar{height:7px;background:#0a1422;border-radius:99px;overflow:hidden;margin-top:7px}.bar span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--green),var(--blue));transition:width .35s}.log{font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;color:#b6c8df;max-height:180px;overflow:auto;background:#0a1422;border-radius:10px;padding:12px;white-space:pre-wrap}.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.kpi{padding:12px;background:#0d1829;border:1px solid var(--line);border-radius:12px}.kpi .metric{font-size:24px}.full{grid-column:1/-1}.foot{color:var(--muted);font-size:12px;margin-top:16px}.switchline{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:13px}input[type=range]{width:100%;accent-color:var(--green)}@media(max-width:800px){.grid{grid-template-columns:1fr}.full{grid-column:auto}.kpis{grid-template-columns:1fr 1fr}.controls{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><div class="logo">H</div><div><div class="eyebrow">Physical AI · Prototype</div><div class="title">HookPilot</div><div class="subtitle">Smart bite detection · controlled hook-setting · assisted retrieval</div></div></div>
+    <div class="pill">SIMULATION ONLY · No hardware connected</div>
+  </header>
+  <div class="grid">
+    <section class="card">
+      <div class="row"><h2>Live line tension</h2><span id="status" class="status"><span class="dot"></span>Monitoring</span></div>
+      <div class="row" style="align-items:end;margin-bottom:14px"><div><div class="metric"><span id="tension">0.42</span> <span class="unit">N</span></div><div class="muted" style="font-size:12px">Simulated sensor input</div></div><div style="text-align:right"><div class="muted" style="font-size:12px">Trigger threshold</div><strong><span id="thresholdText">1.80</span> N</strong></div></div>
+      <canvas id="chart" class="chart" width="720" height="185" aria-label="Simulated line tension chart"></canvas>
+      <div style="margin-top:15px"><div class="row"><label for="threshold">Bite threshold</label><strong><span id="thresholdLabel">1.80</span> N</strong></div><input id="threshold" type="range" min="0.8" max="4" step="0.1" value="1.8"><div class="row muted" style="font-size:11px"><span>More sensitive</span><span>Less sensitive</span></div></div>
+      <div class="controls"><button id="simulate" class="btn primary">Simulate bite</button><button id="noise" class="btn">Simulate water / line noise</button><button id="arm" class="btn">Arm automation</button><button id="reset" class="btn danger">Reset / safe stop</button></div>
+    </section>
+    <section class="card">
+      <div class="row"><h2>Control state machine</h2><span id="mode" class="status warn">Disarmed</span></div>
+      <div class="stage active" id="s1"><div class="num">1</div><div><strong>MONITOR</strong><small>Sample sensor and estimate baseline</small></div></div>
+      <div class="stage" id="s2"><div class="num">2</div><div><strong>CONFIRM BITE</strong><small>Check magnitude and persistence</small></div></div>
+      <div class="stage" id="s3"><div class="num">3</div><div><strong>HOOK SET</strong><small>Limited actuator travel and speed</small></div></div>
+      <div class="stage" id="s4"><div class="num">4</div><div><strong>RETRIEVE</strong><small>Assist winding within force limit</small></div></div>
+      <div class="stage" id="s5"><div class="num">5</div><div><strong>VERIFY / LOG</strong><small>Record outcome or safe-stop reason</small></div></div>
+      <div style="margin-top:15px"><div class="row"><label>Retrieval force limit</label><strong><span id="forceText">4.0</span> N</strong></div><input id="force" type="range" min="1" max="10" step="0.5" value="4"></div>
+      <div style="margin-top:13px" class="switchline"><input id="safety" type="checkbox" checked> Safety interlocks enabled</div>
+      <div class="foot">This demo uses simulated values and timed animations. It does not control a real rod, reel, motor, or sensor.</div>
+    </section>
+    <section class="card full">
+      <div class="row"><h2>Demo telemetry</h2><span class="muted" style="font-size:12px">Local simulation log</span></div>
+      <div class="kpis">
+        <div class="kpi"><div class="muted" style="font-size:11px">Bite events</div><div class="metric" id="events">0</div></div>
+        <div class="kpi"><div class="muted" style="font-size:11px">Hook-set cycles</div><div class="metric" id="cycles">0</div></div>
+        <div class="kpi"><div class="muted" style="font-size:11px">Safety stops</div><div class="metric" id="stops">0</div></div>
+      </div>
+      <div style="margin-top:13px" class="row"><strong>Event log</strong><button id="clear" class="btn">Clear log</button></div>
+      <div id="log" class="log">[BOOT] HookPilot simulation initialized.\n[INFO] No physical device connected. All readings are simulated.</div>
+    </section>
+  </div>
+  <div class="foot">Prototype concept for a Konnex Builders application. Konnex integration is not implemented in this demo; task submission and independent verification require validation against the current SDK and SubNet interfaces.</div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const canvas=$('chart'),ctx=canvas.getContext('2d');
+let points=Array.from({length:70},()=>0.35+Math.random()*0.2),tension=.42,armed=false,busy=false,events=0,cycles=0,stops=0,runToken=0;
+function log(s){const d=new Date().toLocaleTimeString();$('log').textContent+=`\n[${d}] ${s}`;$('log').scrollTop=$('log').scrollHeight}
+function setStatus(text,kind=''){const e=$('status');e.className='status '+kind;e.innerHTML='<span class="dot"></span>'+text}
+function updateReadings(){ $('tension').textContent=tension.toFixed(2); $('thresholdText').textContent=+$('threshold').value; $('thresholdLabel').textContent=+$('threshold').value; $('forceText').textContent=(+$('force').value).toFixed(1); }
+function draw(){
+ const w=canvas.width,h=canvas.height;ctx.clearRect(0,0,w,h);
+ ctx.strokeStyle='#253650';ctx.lineWidth=1;for(let i=1;i<5;i++){let y=i*h/5;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}
+ const max=Math.max(4.5,...points)*1.12,th=+$('threshold').value;
+ ctx.setLineDash([6,5]);ctx.strokeStyle='#ffcc66';ctx.beginPath();let ty=h-(th/max)*h;ctx.moveTo(0,ty);ctx.lineTo(w,ty);ctx.stroke();ctx.setLineDash([]);
+ ctx.strokeStyle='#4ee0a0';ctx.lineWidth=2.5;ctx.beginPath();points.forEach((p,i)=>{let x=i*w/(points.length-1),y=h-(p/max)*h;i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke();
+ ctx.fillStyle='#9db0ca';ctx.font='11px system-ui';ctx.fillText('Tension (N)',10,15);ctx.fillText('Threshold',w-76,Math.max(14,ty-7));
+}
+function addPoint(v){tension=Math.max(0,Math.min(10,v));points.push(tension);if(points.length>70)points.shift();updateReadings();draw()}
+function stage(n){for(let i=1;i<=5;i++)$('s'+i).classList.toggle('active',i===n)}
+function wait(ms){return new Promise(r=>setTimeout(r,ms))}
+async function simulateBite(noisy=false){
+ if(busy){log('Ignored: sequence already running.');return}
+ busy=true;const token=++runToken;events++;$('events').textContent=events;
+ log(noisy?'Noise scenario started.':'Controlled simulated bite started.');
+ setStatus(noisy?'Noise under evaluation':'Candidate event','warn');stage(2);
+ let base=.35+Math.random()*.25;
+ for(let i=0;i<12;i++){if(token!==runToken)return;addPoint(base+(noisy?(Math.random()*1.0):Math.random()*.18));await wait(80)}
+ if(noisy){
+   log('Classifier: transient/noisy signal did not meet persistence rule; no actuator command.');
+   setStatus('Monitoring','');stage(1);busy=false;return;
+ }
+ let th=+$('threshold').value;
+ for(let i=0;i<12;i++){if(token!==runToken)return;addPoint(th+.45+i*.06);await wait(75)}
+ if(!armed){log('Bite pattern detected, but automation is disarmed. No movement commanded.');setStatus('Bite detected · disarmed','warn');stage(1);busy=false;return}
+ if(!$('safety').checked){stops++;$('stops').textContent=stops;log('Safety interlocks disabled: action blocked in demo. Re-enable interlocks to run.');setStatus('Safe stop','bad');stage(5);busy=false;return}
+ log('Bite confirmed by demo rule. Starting limited hook-setting sequence.');
+ setStatus('Hook setting','good');stage(3);
+ for(let i=0;i<6;i++){if(token!==runToken)return;addPoint(th+1.2+Math.random()*.25);await wait(100)}
+ log('Hook-setting motion completed (simulated).');
+ setStatus('Retrieving','good');stage(4);
+ for(let i=0;i<12;i++){if(token!==runToken)return;let v=1.5+Math.random()*(+$('force').value*.9);addPoint(v);await wait(100)}
+ if(tension>+$('force').value){stops++;$('stops').textContent=stops;log('Force limit exceeded: simulated safe stop.');setStatus('Safe stop','bad')}
+ else {cycles++;$('cycles').textContent=cycles;log('Retrieval sequence completed (simulated). Outcome requires external confirmation in a real prototype.');setStatus('Cycle complete','good')}
+ stage(5);await wait(700);stage(1);setStatus(armed?'Armed · monitoring':'Monitoring',armed?'good':'');addPoint(.35+Math.random()*.2);busy=false;
+}
+$('simulate').onclick=()=>simulateBite(false);
+$('noise').onclick=()=>simulateBite(true);
+$('arm').onclick=()=>{armed=!armed;$('arm').textContent=armed?'Disarm automation':'Arm automation';$('mode').textContent=armed?'Armed':'Disarmed';$('mode').className='status '+(armed?'good':'warn');log(armed?'Automation armed for simulation.':'Automation disarmed.');setStatus(armed?'Armed · monitoring':'Monitoring',armed?'good':'');};
+$('reset').onclick=()=>{runToken++;busy=false;armed=false;$('arm').textContent='Arm automation';$('mode').textContent='Disarmed';$('mode').className='status warn';tension=.42;points=Array.from({length:70},()=>.3+Math.random()*.2);stage(1);setStatus('Safe stop','bad');stops++;$('stops').textContent=stops;updateReadings();draw();log('RESET: sequence cancelled, automation disarmed, safe state restored.');};
+$('threshold').oninput=()=>{updateReadings();draw()};$('force').oninput=updateReadings;
+$('clear').onclick=()=>$('log').textContent='[INFO] Log cleared. Simulation remains active.';
+setInterval(()=>{if(!busy){addPoint(.28+Math.random()*.35)}},900);
+updateReadings();draw();
+</script>
+</body>
+</html>
