@@ -10,5 +10,6 @@
 - Event records follow packages/event-schema/hookpilot-event.schema.json. fish_landed is never inferred (default "unknown").
 - Canonical hash: sha256 over JSON with keys sorted recursively, separators (',',':'), with integrity.record_sha256 = "" during hashing.
 - Synthetic signals must be reproducible from (scenario, seed) using mulberry32 PRNG (TS & Python & C++ identical algorithm).
+- One generator ("hookpilot-synth-v1", docs/synthetic-signals.md) and one classifier rule set + default thresholds (firmware config.h) are shared by firmware, Python and the web demo (aligned 2026-10-18). Simulation records name the generator in `source.generator`.
 - Everything simulated is labeled SIMULATION. No fabricated test results: reports are generated from actual runs.
 - Language: all code/docs English.
