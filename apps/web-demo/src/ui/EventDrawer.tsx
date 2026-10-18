@@ -43,7 +43,9 @@ export function EventDrawer({ record: r, prev, onClose }: Props) {
   const recomputed = useMemo(() => recordHash(r), [r]);
   const hashOk = recomputed === r.integrity.record_sha256;
   const linkOk = (r.integrity.prev_record_sha256 ?? null) === (prev ? prev.integrity.record_sha256 : null);
-  const safety = r.safety as HookPilotEvent['safety'] & { reason?: string; checks?: string[] };
+  const reqs = r.actuation.requested ?? [];
+  const safetyReason = r.safety.decision === 'safe_stop' ? r.outcome.stop_reason : reqs.length ? reqs.map((q) => `${q.actuator} ${q.command}: ${q.decision_reason ?? q.decision ?? ''}`).join(' · ') : 'no actuation requested';
+  const latched = Object.entries(r.safety.fault_latched_t_ms ?? {});
   const f = r.features;
 
   return (
@@ -114,23 +116,29 @@ export function EventDrawer({ record: r, prev, onClose }: Props) {
         <dl className="kv">
           <dt>Decision</dt>
           <dd><strong className={r.safety.decision === 'permit' ? 'ok' : r.safety.decision === 'deny' ? 'warn' : 'bad'}>{r.safety.decision.toUpperCase()}</strong></dd>
-          <dt>Reason</dt><dd>{safety.reason ?? '-'}</dd>
-          <dt>Armed at decision</dt><dd>{String(r.safety.armed)}</dd>
+          <dt>Reason</dt><dd>{safetyReason}</dd>
+          <dt>Armed at event start</dt><dd>{String(r.safety.armed)}</dd>
           <dt>Faults</dt><dd>{(r.safety.faults ?? []).length ? r.safety.faults!.join(', ') : 'none'}</dd>
+          {latched.length > 0 && (
+            <>
+              <dt>Latched at</dt><dd>{latched.map(([f, t]) => `${f} t=${t} ms`).join(', ')}</dd>
+            </>
+          )}
         </dl>
-        {safety.checks && safety.checks.length > 0 && (
-          <ol className="trace" style={{ marginTop: 8 }}>
-            {safety.checks.map((c, i) => (
-              <li key={i} className={c.includes('DENY') ? 'fail' : c.startsWith('=>') ? 'final' : 'pass'}>{c}</li>
-            ))}
-          </ol>
-        )}
-        <p className="muted small" style={{ margin: '10px 0 6px' }}>Interlocks as recorded at the CONFIRM arbitration (or at the stop when no arbitration happened):</p>
+        <p className="muted small" style={{ margin: '10px 0 6px' }}>Interlocks and limits as recorded when the event closed:</p>
         <ul className="interlocks">
           {Object.entries(r.safety.interlocks ?? {}).map(([k, v]) => (
             <li key={k}>
-              <span className={v ? 'ok' : 'bad'} aria-hidden="true">{v ? '●' : '○'}</span>
-              {k}: {v ? 'ok' : 'NOT OK'}
+              {typeof v === 'boolean' ? (
+                <>
+                  <span className={v === (k !== 'classifier_can_command_actuators' && k !== 'hook_set_active' && k !== 'retrieval_active') ? 'ok' : 'bad'} aria-hidden="true">{v ? '●' : '○'}</span>
+                  {k}: {String(v)}
+                </>
+              ) : (
+                <>
+                  {k}: {String(v)}
+                </>
+              )}
             </li>
           ))}
         </ul>
@@ -143,10 +151,10 @@ export function EventDrawer({ record: r, prev, onClose }: Props) {
             <div className="table-wrap" style={{ maxHeight: 160 }}>
               <table>
                 <caption className="sr-only">Actuation requests</caption>
-                <thead><tr><th>t_ms</th><th>actuator</th><th>command</th><th>limits</th></tr></thead>
+                <thead><tr><th>t_ms</th><th>actuator</th><th>command</th><th>limits</th><th>safety</th></tr></thead>
                 <tbody>
                   {r.actuation.requested!.map((a, i) => (
-                    <tr key={i}><td>{a.t_ms}</td><td>{a.actuator}</td><td>{a.command}</td><td className="mono">{JSON.stringify(a.limit)}</td></tr>
+                    <tr key={i}><td>{a.t_ms}</td><td>{a.actuator}</td><td>{a.command}</td><td className="mono">{JSON.stringify(a.limit)}</td><td>{a.decision_reason ?? a.decision ?? ''}</td></tr>
                   ))}
                 </tbody>
               </table>
