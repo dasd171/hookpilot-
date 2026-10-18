@@ -1,7 +1,7 @@
 {
   "provenance": {
     "label": "SIMULATION \u2013 synthetic signals, Python reference engine; not field data",
-    "generated_utc": "2026-10-18T11:57:17Z",
+    "generated_utc": "2026-10-18T13:37:16Z",
     "python": "3.12.15",
     "platform": "Linux-6.12.110+-aarch64-with-glibc2.41",
     "generator": "hookpilot-synth-v1",
@@ -80,7 +80,7 @@
       "sensor_failure"
     ],
     "sweep_seeds_per_scenario": 150,
-    "runtime_s": 56.7,
+    "runtime_s": 51.1,
     "command": "python tools/gen_report.py --seeds 300 --sweep-seeds 150"
   },
   "metrics": {
@@ -495,85 +495,5 @@
       "fp": 0,
       "n_neg": 750
     }
-  ],
-  "variant_comparison": {
-    "fw": {
-      "recall_bite": 0.86,
-      "false_trigger_rate": 0.0,
-      "results": {
-        "idle": {
-          "no_event": 150
-        },
-        "bite": {
-          "bite_candidate_confirmed": 129,
-          "rejected_transient": 5,
-          "rejected_noise": 3,
-          "no_event": 13
-        },
-        "noise_current": {
-          "rejected_noise": 113,
-          "no_event": 37
-        },
-        "rod_vibration": {
-          "rejected_vibration": 124,
-          "no_event": 25,
-          "rejected_transient": 1
-        },
-        "manual_handling": {
-          "rejected_manual_handling": 150
-        },
-        "sensor_failure": {
-          "rejected_sensor_fault": 150
-        },
-        "excessive_tension": {
-          "bite_candidate_confirmed": 150
-        },
-        "motor_stall": {
-          "bite_candidate_confirmed": 150
-        },
-        "comm_loss": {
-          "bite_candidate_confirmed": 150
-        }
-      }
-    },
-    "web": {
-      "recall_bite": 0.84,
-      "false_trigger_rate": 0.2,
-      "results": {
-        "idle": {
-          "no_event": 150
-        },
-        "bite": {
-          "bite_candidate_confirmed": 126,
-          "rejected_transient": 4,
-          "no_event": 20
-        },
-        "noise_current": {
-          "no_event": 150
-        },
-        "rod_vibration": {
-          "rejected_vibration": 82,
-          "rejected_transient": 39,
-          "no_event": 27,
-          "rejected_noise": 2
-        },
-        "manual_handling": {
-          "bite_candidate_confirmed": 150
-        },
-        "sensor_failure": {
-          "rejected_manual_handling": 83,
-          "rejected_sensor_fault": 67
-        },
-        "excessive_tension": {
-          "bite_candidate_confirmed": 150
-        },
-        "motor_stall": {
-          "bite_candidate_confirmed": 150
-        },
-        "comm_loss": {
-          "bite_candidate_confirmed": 150
-        }
-      }
-    }
-  }
+  ]
 }
