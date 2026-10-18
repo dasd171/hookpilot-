@@ -112,6 +112,12 @@ class _Sample:
                  "detrended")
 
 
+def trigger_line(s, th: "Thresholds") -> str:
+    """First rule-trace line of every candidate (identical text in firmware, Python and TS)."""
+    return (f"t={s.t_ms:.0f}ms TRIGGER delta={s.delta:.3f}N >= trigger_delta_n={th.trigger_delta_n:.3f}N "
+            f"(baseline frozen at {s.baseline:.3f}N)")
+
+
 class FwProcessor:
     """Port of BaselineSignalProcessor (C++)."""
     K = 64
@@ -121,6 +127,9 @@ class FwProcessor:
         self.vw = max(2, min(th.variance_window_samples, self.K))
         self.dw = max(1, min(th.detrend_window_samples, self.K))
         self.lag = max(1, min(th.rate_lag_samples, self.K - 1))
+        self.reset()
+
+    def reset(self) -> None:
         self.init = False
         self.frozen = False
         self.x = self.sm = self.bl = 0.0
@@ -246,6 +255,82 @@ def decide_from_features(features: dict, th: Thresholds) -> str:
 
 
 # --------------------------------------------------------------------------------------------
+# Detector (port of firmware DeterministicBaselineV1, used by the tick engine in engine.py)
+# --------------------------------------------------------------------------------------------
+class Detector:
+    def __init__(self, th: Thresholds) -> None:
+        self.th = th
+        self.f: dict = {}
+        self.t_trigger = 0.0
+        self.t_last = 0.0
+        self.run_alive = False
+        self.schmitt = 0
+        self.trigger_line = ""
+        self.quiet = False
+        self.quiet_since = 0.0
+
+    def should_trigger(self, s: _Sample) -> bool:
+        return s.valid and s.delta >= self.th.trigger_delta_n
+
+    def begin_candidate(self, s: _Sample) -> None:
+        self.f = {"baseline_n": s.baseline, "peak_delta_n": 0.0, "max_rate_n_per_s": 0.0,
+                  "duration_above_ms": 0.0, "continuous_above_ms": 0.0, "short_term_variance": 0.0,
+                  "oscillation_count": 0, "sensor_health": s.health}
+        self.t_trigger = self.t_last = s.t_ms
+        self.run_alive = True
+        self.schmitt = 0
+        self.quiet = False
+        self.trigger_line = trigger_line(s, self.th)
+        self.update(s)
+
+    def update(self, s: _Sample) -> bool:
+        th, f = self.th, self.f
+        if not s.valid:
+            f["sensor_health"] = s.health
+            return True
+        f["peak_delta_n"] = max(f["peak_delta_n"], s.delta)
+        f["max_rate_n_per_s"] = max(f["max_rate_n_per_s"], s.rate)
+        f["short_term_variance"] = max(f["short_term_variance"], s.variance)
+        above = s.delta >= th.trigger_delta_n
+        if above:
+            f["duration_above_ms"] += DT_MS
+        if self.run_alive:
+            if above:
+                f["continuous_above_ms"] = (s.t_ms - self.t_trigger) + DT_MS
+            else:
+                self.run_alive = False
+        if s.detrended >= th.osc_band_n:
+            if self.schmitt == -1:
+                f["oscillation_count"] += 1
+            self.schmitt = 1
+        elif s.detrended <= -th.osc_band_n:
+            if self.schmitt == 1:
+                f["oscillation_count"] += 1
+            self.schmitt = -1
+        self.t_last = s.t_ms
+        if s.delta > th.manual_handling_delta_n:
+            return True
+        return (s.t_ms - self.t_trigger) + DT_MS >= th.decision_window_ms
+
+    def decide(self) -> tuple[str, str, list[str], dict]:
+        res, reason, tr = decide_fw(self.f, self.th, (self.t_last - self.t_trigger) + DT_MS)
+        if self.trigger_line:
+            tr = [self.trigger_line] + tr
+        return res, reason, tr, dict(self.f)
+
+    def rearmed(self, s: _Sample) -> bool:
+        th = self.th
+        below = s.valid and s.delta < th.trigger_delta_n * th.release_ratio
+        if not below:
+            self.quiet = False
+            return False
+        if not self.quiet:
+            self.quiet = True
+            self.quiet_since = s.t_ms
+        return s.t_ms - self.quiet_since >= th.rearm_quiet_ms
+
+
+# --------------------------------------------------------------------------------------------
 # Streaming classifier (processor + detector)
 # --------------------------------------------------------------------------------------------
 class StreamingClassifier:
@@ -271,8 +356,7 @@ class StreamingClassifier:
                   "oscillation_count": 0, "sensor_health": s.health}
         self.run_alive = True
         self.schmitt = 0
-        self.trigger_trace = [f"t={s.t_ms:.0f}ms TRIGGER delta={s.delta:.3f}N >= trigger_delta_n={th.trigger_delta_n}N "
-                              f"(baseline frozen at {s.baseline:.3f}N)"]
+        self.trigger_trace = [trigger_line(s, th)]
         self.proc.frozen = True
         self.state = "CANDIDATE"
         self._update_fw(s)  # beginCandidate() calls update(trigger); return value ignored
