@@ -8,13 +8,13 @@
 namespace hp {
 
 namespace {
-// Round for logging (keeps lines short and avoids exponent notation for tiny values).
+// Full precision (shortest round-trip JSON number); non-finite -> 0 and -0 -> 0 so the canonical JSON
+// is identical to the Python / TS ports. (Before 2026-10-18 values were rounded to 4 decimals.)
 double rnd(double v, int decimals = 4) {
+  (void)decimals;
   if (!std::isfinite(v)) return 0.0;
-  const double m = std::pow(10.0, decimals);
-  double r = std::round(v * m) / m;
-  if (r == 0) r = 0;  // no -0
-  return r;
+  if (v == 0) return 0.0;
+  return v;
 }
 
 // Days-from-civil inverse (H. Hinnant), proleptic Gregorian, UTC.
@@ -140,6 +140,8 @@ Json recordToJson(const EventRecord& r) {
   cl["rule_trace"] = trace;
   cl["classifier"] = r.classifier;
   cl["thresholds"] = thresholdsJson(r.thresholds);
+  if (r.has_trigger) cl["trigger_t_ms"] = r.trigger_t_ms;
+  if (r.has_decision) cl["decision_t_ms"] = r.decision_t_ms;
   j["classification"] = cl;
 
   Json sf = Json::object();
@@ -149,6 +151,7 @@ Json recordToJson(const EventRecord& r) {
   Json faults = Json::array();
   for (const auto& s : faultList(r.faults)) faults.push(s);
   sf["faults"] = faults;
+  sf["fault_latched_t_ms"] = r.fault_latched_t_ms;
   j["safety"] = sf;
 
   Json act = Json::object();
