@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="780" viewBox="0 0 1200 780" font-family="Helvetica, Arial, sans-serif" font-size="12">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334"/>
+    </marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/>
+    </marker>
+    <style>
+      .grp{fill:#f6f8fb;stroke:#8a99ad;stroke-width:1.2;rx:10}
+      .safe{fill:#fdf0ef;stroke:#c0392b;stroke-width:1.4}
+      .box{fill:#ffffff;stroke:#334;stroke-width:1.1}
+      .sbox{fill:#ffffff;stroke:#c0392b;stroke-width:1.3}
+      .t{fill:#1d2733}
+      .h{font-weight:bold;font-size:13px;fill:#1d2733}
+      .hs{font-weight:bold;font-size:13px;fill:#c0392b}
+      .l{stroke:#334;stroke-width:1.3;fill:none;marker-end:url(#a)}
+      .lr{stroke:#c0392b;stroke-width:1.6;fill:none;marker-end:url(#r)}
+      .lbl{font-size:10.5px;fill:#445}
+      .lblr{font-size:10.5px;fill:#c0392b}
+    </style>
+  </defs>
+  <rect width="1200" height="780" fill="#ffffff"/>
+  <text x="20" y="28" font-size="18" font-weight="bold" class="t">HookPilot hardware architecture — PROVISIONAL (not built)</text>
+  <text x="20" y="46" class="lbl">Actuator power is gated by a hard-wired safety chain outside the ESP32. Red = safety path. Part choices and values are candidates (see bom.csv / wiring-table.md).</text>
+
+  <!-- POWER -->
+  <rect x="20" y="64" width="270" height="250" class="grp" rx="10"/>
+  <text x="32" y="84" class="h">Power (IP67 battery box)</text>
+  <rect x="36" y="96" width="238" height="36" class="box" rx="5"/>
+  <text x="155" y="111" text-anchor="middle" class="t">3S Li-ion 11.1 V nom. + BMS</text>
+  <text x="155" y="125" text-anchor="middle" class="lbl">undervoltage threshold 10.5 V (provisional)</text>
+  <rect x="36" y="146" width="238" height="28" class="box" rx="5"/>
+  <text x="155" y="165" text-anchor="middle" class="t">7.5 A fuse + master switch → 12 V bus</text>
+  <rect x="36" y="188" width="114" height="40" class="box" rx="5"/>
+  <text x="93" y="205" text-anchor="middle" class="t">Buck 5 V / 3 A</text>
+  <text x="93" y="220" text-anchor="middle" class="lbl">logic, supervisor</text>
+  <rect x="160" y="188" width="114" height="40" class="box" rx="5"/>
+  <text x="217" y="205" text-anchor="middle" class="t">Buck 7.4 V / 5 A</text>
+  <text x="217" y="220" text-anchor="middle" class="lbl">servo rail</text>
+  <rect x="36" y="242" width="238" height="56" class="box" rx="5"/>
+  <text x="155" y="260" text-anchor="middle" class="t">Battery divider 100k / 22k → ADC</text>
+  <text x="155" y="276" text-anchor="middle" class="t">INA219 bus voltage / current (I2C)</text>
+  <text x="155" y="291" text-anchor="middle" class="lbl">feeds UNDERVOLTAGE interlock</text>
+  <path d="M155,132 L155,146" class="l"/>
+  <path d="M93,174 L93,188" class="l"/>
+  <path d="M217,174 L217,188" class="l"/>
+
+  <!-- SENSOR -->
+  <rect x="20" y="334" width="270" height="210" class="grp" rx="10"/>
+  <text x="32" y="354" class="h">Line-tension sensor (guide-mounted)</text>
+  <text x="155" y="374" text-anchor="middle" class="lbl">fishing line, fixed wrap angle θ ≈ 20°</text>
+  <circle cx="60" cy="418" r="9" fill="#fff" stroke="#334"/>
+  <circle cx="150" cy="402" r="9" fill="#fff" stroke="#334"/>
+  <circle cx="240" cy="418" r="9" fill="#fff" stroke="#334"/>
+  <path d="M30,410 L60,409 L150,393 L240,409 L280,410" stroke="#2a7ab0" stroke-width="2" fill="none"/>
+  <path d="M150,411 L150,440" stroke="#334" stroke-width="3"/>
+  <rect x="90" y="440" width="120" height="34" class="box" rx="4"/>
+  <text x="150" y="455" text-anchor="middle" class="t">1 kg bar load cell</text>
+  <text x="150" y="468" text-anchor="middle" class="lbl">+150 % overload stop</text>
+  <text x="158" y="491" class="lbl">F = 2T·sin(θ/2)·(a/b)</text>
+  <rect x="90" y="500" width="120" height="30" class="box" rx="4"/>
+  <text x="150" y="519" text-anchor="middle" class="t">HX711 24-bit ADC</text>
+  <path d="M150,474 L150,500" class="l"/>
+
+  <!-- CONTROLLER -->
+  <rect x="330" y="64" width="360" height="470" class="grp" rx="10"/>
+  <text x="342" y="84" class="h">Main controller (IP67 electronics box)</text>
+  <rect x="350" y="98" width="155" height="28" class="box" rx="4"/><text x="427" y="116" text-anchor="middle" class="t">AS5600 pivot angle (I2C)</text>
+  <rect x="515" y="98" width="155" height="28" class="box" rx="4"/><text x="592" y="116" text-anchor="middle" class="t">DS18B20 motor temp</text>
+  <rect x="350" y="134" width="155" height="28" class="box" rx="4"/><text x="427" y="152" text-anchor="middle" class="t">Arm key switch</text>
+  <rect x="515" y="134" width="155" height="28" class="box" rx="4"/><text x="592" y="152" text-anchor="middle" class="t">Status LED + buzzer</text>
+  <text x="510" y="180" text-anchor="middle" class="lbl">peripherals above connect to ESP32 GPIO / I2C (pin map: wiring-table.md)</text>
+  <rect x="360" y="192" width="300" height="130" class="box" rx="8" stroke-width="1.6"/>
+  <text x="510" y="216" text-anchor="middle" font-size="14" font-weight="bold" class="t">ESP32-WROOM-32E</text>
+  <text x="510" y="236" text-anchor="middle" class="t">signal processor · deterministic-baseline-v1</text>
+  <text x="510" y="252" text-anchor="middle" class="t">state machine · firmware safety controller</text>
+  <text x="510" y="268" text-anchor="middle" class="t">event logger (sha256 hash chain)</text>
+  <text x="510" y="288" text-anchor="middle" class="lbl">classifier only REQUESTS; safety PERMITs / DENIEs</text>
+  <text x="510" y="304" text-anchor="middle" class="lbl">watchdog reset → reboot into IDLE (disarmed)</text>
+  <path d="M210,515 L320,515 L320,300 L360,300" class="l"/>
+  <text x="222" y="509" class="lbl">DOUT / SCK</text>
+  <path d="M274,270 L360,270" class="l"/>
+  <text x="292" y="264" class="lbl">ADC + I2C</text>
+  <rect x="380" y="430" width="260" height="84" class="box" rx="6"/>
+  <text x="510" y="450" text-anchor="middle" font-weight="bold" class="t">Edge host (laptop / SBC)</text>
+  <text x="510" y="467" text-anchor="middle" class="t">edge-controller → evidence-service</text>
+  <text x="510" y="483" text-anchor="middle" class="t">→ MockKonnexAdapter (SIMULATION)</text>
+  <text x="510" y="502" text-anchor="middle" class="lbl">outside the safety loop; link loss = COMM_LOSS</text>
+  <path d="M510,322 L510,430" class="l" marker-start="url(#a)"/>
+  <text x="518" y="380" class="lbl">USB-serial / Wi-Fi, JSON lines</text>
+
+  <!-- SAFETY CHAIN -->
+  <rect x="730" y="64" width="450" height="250" class="safe" rx="10"/>
+  <text x="742" y="84" class="hs">Independent safety chain (hard-wired + supervisor MCU)</text>
+  <rect x="746" y="96" width="130" height="40" class="sbox" rx="5"/>
+  <text x="811" y="112" text-anchor="middle" class="t">E-stop mushroom</text>
+  <text x="811" y="127" text-anchor="middle" class="lbl">NC, latching</text>
+  <rect x="746" y="146" width="130" height="40" class="sbox" rx="5"/>
+  <text x="811" y="162" text-anchor="middle" class="t">Over-travel switch</text>
+  <text x="811" y="177" text-anchor="middle" class="lbl">hook lever, NC</text>
+  <rect x="746" y="196" width="130" height="50" class="sbox" rx="5"/>
+  <text x="811" y="213" text-anchor="middle" class="t">Safety supervisor</text>
+  <text x="811" y="227" text-anchor="middle" class="lbl">XIAO RP2040 class</text>
+  <text x="811" y="240" text-anchor="middle" class="lbl">heartbeat watchdog</text>
+  <rect x="746" y="258" width="130" height="46" class="sbox" rx="5"/>
+  <text x="811" y="275" text-anchor="middle" class="t">Over-current comp.</text>
+  <text x="811" y="291" text-anchor="middle" class="lbl">analogue, from IPROPI</text>
+  <path d="M811,258 L811,248" class="lr"/>
+  <rect x="930" y="140" width="230" height="64" class="sbox" rx="6" stroke-width="2"/>
+  <text x="1045" y="162" text-anchor="middle" font-weight="bold" class="t">Actuator power enable</text>
+  <text x="1045" y="178" text-anchor="middle" class="t">relay + high-side MOSFET</text>
+  <text x="1045" y="194" text-anchor="middle" class="lblr">ON only if ALL inputs healthy</text>
+  <path d="M876,116 L930,158" class="lr"/>
+  <path d="M876,166 L930,172" class="lr"/>
+  <path d="M876,220 L930,188" class="lr"/>
+  <text x="900" y="250" class="lblr">manual reset after any trip;</text>
+  <text x="900" y="264" class="lblr">boots with enable OFF</text>
+  <path d="M660,232 L746,232" class="lr"/>
+  <text x="668" y="246" class="lblr">heartbeat</text>
+  <path d="M746,116 L706,116 L706,212 L662,212" class="lr"/>
+  <text x="710" y="190" class="lblr">e-stop</text><text x="710" y="204" class="lblr">sense</text>
+
+  <!-- ACTUATORS -->
+  <rect x="730" y="334" width="450" height="320" class="grp" rx="10"/>
+  <text x="742" y="354" class="h">Actuators (switched power from enable)</text>
+  <rect x="750" y="366" width="370" height="114" class="box" rx="6"/>
+  <text x="935" y="385" text-anchor="middle" font-weight="bold" class="t">Hook-set: rod-holder pivot (separate from reel)</text>
+  <text x="935" y="402" text-anchor="middle" class="t">waterproof servo (60 kg·cm class) → pushrod</text>
+  <text x="935" y="417" text-anchor="middle" class="t">(quick-release pin) → butt lever r = 60 mm → pivot</text>
+  <text x="935" y="432" text-anchor="middle" class="t">cmd 12 mm (≈11.5°) · limit 15 mm · hard stop 16 mm</text>
+  <text x="935" y="450" text-anchor="middle" class="lbl">AS5600 on pivot; over-travel switch (15.5 mm) → safety chain</text>
+  <text x="935" y="465" text-anchor="middle" class="lbl">rod rests in an open cradle: can always be lifted out by hand</text>
+  <rect x="750" y="492" width="370" height="132" class="box" rx="6"/>
+  <text x="935" y="511" text-anchor="middle" font-weight="bold" class="t">Retrieval assist: external drive on reel handle</text>
+  <text x="935" y="528" text-anchor="middle" class="t">DRV8874 (PH/EN, IPROPI, nFAULT) → 12 V gearmotor</text>
+  <text x="935" y="544" text-anchor="middle" class="t">+ encoder → slip clutch → handle coupler (dog clutch)</text>
+  <text x="935" y="562" text-anchor="middle" class="lbl">drives the handle, never the spool:</text>
+  <text x="935" y="576" text-anchor="middle" class="lbl">the reel drag stays the fish-side force limit</text>
+  <text x="935" y="592" text-anchor="middle" class="lbl">pause &gt; assist_pause_n · OVER_TENSION &gt; retrieval_force_limit_n</text>
+  <text x="935" y="608" text-anchor="middle" class="lbl">stall: ≥ 1.8 A with &lt; 5 mm progress in 200 ms (provisional)</text>
+  <text x="955" y="644" text-anchor="middle" class="lbl">returns to ESP32: IPROPI current, nFAULT, encoder A/B</text>
+  <path d="M1135,204 L1135,410 L1120,410" class="lr"/>
+  <text x="1130" y="300" text-anchor="end" class="lblr">7.4 V</text>
+  <path d="M1155,204 L1155,540 L1120,540" class="lr"/>
+  <text x="1150" y="470" text-anchor="end" class="lblr">12 V</text>
+  <path d="M660,252 L696,252 L696,420 L750,420" class="l"/>
+  <text x="710" y="414" class="lbl">PWM</text>
+  <path d="M660,272 L688,272 L688,532 L750,532" class="l"/>
+  <text x="702" y="526" class="lbl">PH/EN</text>
+  <path d="M750,600 L712,600 L712,292 L660,292" class="l"/>
+
+  <!-- footer -->
+  <rect x="20" y="560" width="670" height="94" class="grp" rx="10"/>
+  <text x="32" y="580" class="h">Force paths (mechanical, see mechanical/prototype-spec.md)</text>
+  <text x="32" y="600" class="t">Fish load: line → sensor guide rollers → rod blank → reel seat cradle → pivot shaft → frame / rod-holder spike.</text>
+  <text x="32" y="618" class="t">Hook-set: servo horn → pushrod → butt lever → pivot; over-travel absorbed by elastomer-faced hard stop on frame.</text>
+  <text x="32" y="636" class="t">Retrieval: motor → slip clutch → handle → reel gear train → drag washer stack → spool (drag slips first).</text>
+  <text x="20" y="690" class="lbl">HookPilot · hardware/architecture/block-diagram.svg · hand-written SVG matching block-diagram.md (Mermaid). Status: design proposal only — no hardware built, nothing bench-tested.</text>
+</svg>
