@@ -1,7 +1,8 @@
 # Synthetic signals — `hookpilot-synth-v1` (SIMULATION)
 
 Normative description of the generator in `services/evidence-service/evidence_service/synth.py`,
-ported bit-for-bit (to 4 decimals as recorded) by `firmware/src/core/scenarios.cpp` and, since
+ported by `firmware/src/core/scenarios.cpp` (firmware records carry full-precision samples since
+2026-10-18; they match Python within 1.4e-14 on the shared engine cases, docs/testing.md) and, since
 2026-10-18, by the web demo (`apps/web-demo/src/engine/signals.ts`, replacing its former
 `hookpilot-web-synth-v1`). `apps/web-demo/tests/cross_impl.test.ts` checks the TS port against Python
 fixtures (`tools/gen_web_fixtures.py`): |diff| ≤ 1e-9 required, 5.6e-17 observed.
