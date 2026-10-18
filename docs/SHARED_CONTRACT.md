@@ -10,6 +10,7 @@
 - Event records follow packages/event-schema/hookpilot-event.schema.json. fish_landed is never inferred (default "unknown").
 - Canonical hash: sha256 over JSON with keys sorted recursively, separators (',',':'), with integrity.record_sha256 = "" during hashing.
 - Synthetic signals must be reproducible from (scenario, seed) using mulberry32 PRNG (TS & Python & C++ identical algorithm).
+- One engine model (2026-10-18): tick order, debounce rules, actuator / line-load equations, fault-injection timing and record contents are specified in docs/engine-spec.md (firmware C++ is ground truth); firmware, Python and TS must produce identical per-tick traces and record cores for any (scenario, seed, armed, injections, overrides). A completed cycle ends in IDLE, disarmed; while disarmed the classifier observes and logs but nothing is requested; retrieval starts no earlier than hook_to_retrieval_gap_ms (100 ms, provisional) after the hook-set stroke ends.
 - One generator ("hookpilot-synth-v1", docs/synthetic-signals.md) and one classifier rule set + default thresholds (firmware config.h) are shared by firmware, Python and the web demo (aligned 2026-10-18). Simulation records name the generator in `source.generator`.
 - Everything simulated is labeled SIMULATION. No fabricated test results: reports are generated from actual runs.
 - Language: all code/docs English.
