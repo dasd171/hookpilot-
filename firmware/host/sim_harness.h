@@ -1,5 +1,9 @@
 // Host simulation rig - SIMULATION ONLY. Wires the real control core (signal processor,
 // deterministic-baseline-v1, safety controller, state machine, logger) to host mocks.
+//
+// The rig, the mocks and the run procedure below are the normative engine model shared with the
+// Python port (services/evidence-service/evidence_service/engine.py) and the web demo
+// (apps/web-demo/src/engine/engine.ts). See docs/engine-spec.md.
 #pragma once
 
 #include <memory>
@@ -18,13 +22,33 @@
 namespace hp {
 namespace sim {
 
+// Fault injection: "<kind>@<when>[:<value>]", when = "<t_ms>" (absolute) or "retrieval+<ms>"
+// (relative to the tick that first observed RETRIEVE). Applied at the END of the first harness step
+// whose condition holds (t >= when), so it takes effect from the next tick. Kinds:
+//   sensor_disconnect, sensor_nan, sensor_out_of_range[:N=60], sensor_stuck, over_tension[:N=25]
+//   (sensor override), motor_stall, encoder_loss, hook_jam, comm_loss (heartbeats stop, link still
+//   reports up), link_down, undervoltage[:V=10.2], estop, over_temp[:C=75], watchdog_reset (boot cause;
+//   <when> ignored).
+struct Injection {
+  std::string kind;
+  bool rel_retrieval = false;
+  double at_ms = 0;
+  bool has_value = false;
+  double value = 0;
+};
+bool parseInjection(const std::string& spec, Injection* out, std::string* err = nullptr);
+bool isKnownInjection(const std::string& kind);
+
 struct RigOptions {
   ControllerConfig cfg;
   bool watchdog_reset_at_boot = false;
   bool simulate_line_load = true;   // add actuator line loads to the sensor (SIMULATION coupling)
-  double hook_set_line_load_n = 1.5;
-  double retrieval_line_load_n = 0.6;
+  SimCoupling coupling;
   LineSink* extra_sink = nullptr;   // e.g. stdout
+  // runScenario only:
+  bool arm_at_start = true;         // arm right after the first tick (false: disarmed observation run)
+  std::vector<Injection> injections;
+  LineSink* trace_sink = nullptr;   // one JSON line per harness step + one "end" line
 };
 
 class SimRig {
@@ -35,6 +59,7 @@ class SimRig {
   void step();                         // advance clock by kDtMs (except first step) and tick
   void stepN(int n) { for (int i = 0; i < n; ++i) step(); }
   bool arm(std::string* why = nullptr) { return ctl->requestArm(why); }
+  double lastLoad() const { return last_load_; }
 
   mock::MockClock clock;
   mock::MockWatchdog watchdog;
@@ -61,7 +86,15 @@ class SimRig {
     }
   } tee_;
   bool first_step_ = true;
+  double last_load_ = 0;
 };
+
+// Applies one injection to the rig (watchdog_reset is a boot option and is ignored here).
+void applyInjection(SimRig& rig, const Injection& inj);
+
+// One tick-trace JSON line (docs/engine-spec.md "Tick trace").
+std::string traceLine(SimRig& rig, int k, const char* phase, size_t* trans_cursor, size_t* req_cursor,
+                      size_t* rec_cursor, const std::vector<std::string>& injected);
 
 struct ScenarioRunResult {
   std::vector<std::string> lines;   // emitted JSON event lines
@@ -71,8 +104,10 @@ struct ScenarioRunResult {
   bool reached_retrieve = false;
 };
 
-// Runs (scenario, seed) end-to-end: boot, arm, replay, inject the scenario's fault schedule
-// (motor_stall / comm_loss after retrieval start), extra settle time, then close any open event.
+// Runs (scenario, seed) end-to-end: boot, tick 0, arm (unless disarmed), replay the signal one sample
+// per tick, apply injections (the scenario's own motor_stall / comm_loss fault is the injection
+// "<kind>@retrieval+<fault_after_retrieval_start_ms>"), then at the end of the window: disarm if an
+// event is still open, and log a no_event summary if the run logged nothing.
 ScenarioRunResult runScenario(const std::string& scenario, uint32_t seed, int duration_ms = 8000,
                               const RigOptions& opt = RigOptions());
 
