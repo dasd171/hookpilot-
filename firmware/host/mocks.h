@@ -121,6 +121,8 @@ class MockRetrieval : public RetrievalController {
   bool controlsHardware() const override { return false; }
 
   void setLoad(double tension_n) { load_n_ = tension_n; }
+  double current_base_a = 0.3;   // running current = base + per_n * max(0, load)  (SimCoupling)
+  double current_per_n_a = 0.1;
   // fault injection
   void injectStall(bool on) { stall_ = on; }
   void injectEncoderLoss(bool on) { enc_loss_ = on; }
@@ -158,7 +160,7 @@ class MockComm : public CommunicationAdapter {
   MockComm() { banner("MockComm"); }
   bool begin() override { return true; }
   void poll(uint32_t now_ms) override {
-    if (up_) last_hb_ = now_ms;
+    if (up_ && !hb_lost_) last_hb_ = now_ms;
   }
   bool sendLine(const std::string& line) override {
     if (!up_) return false;
@@ -168,10 +170,12 @@ class MockComm : public CommunicationAdapter {
   bool linkUp() const override { return up_; }
   uint32_t lastHeartbeatMs() const override { return last_hb_; }
   void setLinkUp(bool up) { up_ = up; }
+  // Heartbeats stop arriving while the link still reports up: only the comm_timeout_ms watchdog sees it.
+  void injectHeartbeatLoss(bool on) { hb_lost_ = on; }
   const std::vector<std::string>& sent() const { return sent_; }
 
  private:
-  bool up_ = true;
+  bool up_ = true, hb_lost_ = false;
   uint32_t last_hb_ = 0;
   std::vector<std::string> sent_;
 };
