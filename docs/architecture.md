@@ -84,16 +84,18 @@ What this does **not** establish: that the physical event happened. See `konnex-
    `python -m konnex_adapter verify-bundle powp.zip` independently.
 
 ## 7. Known integration gaps (2026-10-18)
-- Classifier and generator are unified (2026-10-18). Remaining difference: the framing lines of the rule trace.
-  Python and web start with a `t=… TRIGGER …` line. Firmware appends safety-interruption lines and has its own
-  wording for a sensor fault while monitoring. Rule lines R0–R5 are identical.
-- Firmware records now include `continuous_above_ms`, as Python and web records do. Older firmware records
-  without it are still checked: R5 rule consistency falls back to `duration_above_ms`, as the replay notes say.
-- The firmware rig adds actuator line load to the simulated sensor after actuation starts; replay
-  therefore compares only pre-actuation samples (documented in replay notes).
+- Classifier, generator **and engine** (state machine, safety controller, actuator and line-load models,
+  fault-injection timing, record contents) are unified across firmware, Python and the web demo
+  (`docs/engine-spec.md`); per-tick traces and record cores match on the 636 shared cases (docs/testing.md).
+  Rule traces are byte-identical, including the `t=… TRIGGER …` header and the safety-interruption lines.
+- Record fields outside the compared core differ by design (device identity, event id, calibration label,
+  thresholds block layout, Python's `test_outcome` / `class_match`), so record hashes differ per implementation.
+- The rig adds actuator line load to the simulated sensor while an actuator is energised; replay therefore
+  compares only pre-actuation samples (documented in replay notes). Later candidates of a multi-event run are
+  replayed by rule consistency (the regenerated window's first decision is a different candidate).
 - No pin map in firmware yet; `hardware/wiring/` proposes one.
-- Firmware hands over from hook-set (at_target) to retrieval on the same 20 ms tick with zero dead time
-  and keeps the hook-set servo holding position during retrieval; the verifier accepts a same-tick
-  hand-over (no positive-length overlap). The Python engine uses a 40 ms gap. Agree on a minimum dead time.
-- The drag-preserving "assist pause" (`assist_pause_n`) exists only in the Python engine; firmware relies
-  on the 8 N OVER_TENSION trip. It is therefore optional in the task constraints.
+- Hook-set → retrieval hand-over: a provisional 100 ms minimum dead time (`hook_to_retrieval_gap_ms`) in all
+  three engines, enforced by the controller and by the safety controller's permit check. The hook-set servo
+  holds its position during retrieval and returns to rest afterwards.
+- The former Python-only "assist pause" (`assist_pause_n`) was removed from all engines; the 8 N OVER_TENSION
+  trip is the only tension limit during retrieval. The task verifier keeps it as an optional constraint.
