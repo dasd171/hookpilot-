@@ -1,0 +1,24 @@
+signal,esp32_pin,direction,connects_to,notes,status
+HX711 DOUT,GPIO34,in,HX711 DT,"input-only pin, fine for data",PROVISIONAL
+HX711 SCK,GPIO25,out,HX711 SCK,holding SCK high > 60 µs powers HX711 down,PROVISIONAL
+HX711 RATE,—,—,HX711 RATE → VCC,80 SPS (needed for 50 Hz sampling); board must expose RATE,PROVISIONAL
+Hook-set servo PWM,GPIO18,out,servo signal (via 3.3→5 V buffer if servo needs it),LEDC 50 Hz; servo power from **switched** 7.4 V rail,PROVISIONAL
+Motor PH (direction),GPIO26,out,DRV8874 PH,,PROVISIONAL
+Motor EN (PWM),GPIO27,out,DRV8874 EN,LEDC ~20 kHz,PROVISIONAL
+Motor nSLEEP,GPIO13,out,DRV8874 nSLEEP,pulled low by 100 k → driver asleep at boot,PROVISIONAL
+Motor nFAULT,GPIO35,in,DRV8874 nFAULT,open-drain: external 10 k pull-up to 3.3 V,PROVISIONAL
+Motor current (IPROPI),"GPIO36 (SVP, ADC1_CH0)",analog in,DRV8874 IPROPI + R_IPROPI,also feeds the over-current comparator,PROVISIONAL
+Encoder A,GPIO32,in,motor encoder A,PCNT unit; encoder powered 3.3 V or level-shifted,PROVISIONAL
+Encoder B,GPIO33,in,motor encoder B,,PROVISIONAL
+I2C SDA,GPIO21,bi,"INA219 (0x40), AS5600 (0x36)",4.7 k pull-ups to 3.3 V,PROVISIONAL
+I2C SCL,GPIO22,out,"INA219, AS5600",100 kHz,PROVISIONAL
+Battery voltage,"GPIO39 (SVN, ADC1_CH3)",analog in,divider 100 k / 22 k + 100 nF,12.6 V → 2.27 V; 11 dB attenuation; calibrate with eFuse Vref,PROVISIONAL
+E-stop sense,GPIO4,in,auxiliary NO/NC contact of e-stop,internal pull-up; informs firmware (E_STOP fault); **not** the safety path,PROVISIONAL
+Arm key switch,GPIO14,in,key switch to GND,internal pull-up; open = disarmed,PROVISIONAL
+Home limit switch,GPIO16,in,hook lever home switch,internal pull-up,PROVISIONAL
+Over-travel switch (sense),GPIO17,in,second contact of over-travel switch,the NC contact itself is in the hardware safety chain,PROVISIONAL
+Heartbeat to supervisor,GPIO23,out,supervisor GPIO (e.g. D1),square wave; supervisor drops enable if it stops > 300 ms (`comm_timeout_ms` analogue),PROVISIONAL
+Motor temperature,GPIO5,bi,DS18B20 data,4.7 k pull-up (keeps strapping pin high at boot),PROVISIONAL
+Buzzer,GPIO19,out,buzzer via NPN,,PROVISIONAL
+Status LED,GPIO2,out,on-board LED,,PROVISIONAL
+UART0 TX/RX,GPIO1/3,—,USB-serial to edge host,JSON lines to `services/edge-controller`,PROVISIONAL
