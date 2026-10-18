@@ -14,7 +14,7 @@ these records onto Proof-of-Physical-Work concepts (local mock; official SDK not
 ## Repository map
 | Path | What |
 |---|---|
-| `apps/web-demo/` | React + TS + Vite interactive simulation demo (63 vitest tests) |
+| `apps/web-demo/` | React + TS + Vite interactive simulation demo (68 vitest tests) |
 | `firmware/` | C++17 firmware core, mocks, ESP32 driver stubs (provisional), 46 host tests |
 | `services/evidence-service/` | Schema/hash-chain verification, deterministic replay, CSV export |
 | `services/konnex-adapter/` | Mock Konnex adapter, evidence bundle builder, 11-criteria verifier, disabled CLI skeleton |
@@ -42,14 +42,26 @@ python tools/gen_report.py --seeds 300 --sweep-seeds 150          # regenerates 
 A single-file build of the demo is at `apps/web-demo/hookpilot-demo-standalone.html` (open directly in a browser).
 
 ## Results actually produced (synthetic data only, 2026-10-18)
-- Tests: web 63/63, firmware 46/46 (413 checks), Python 125 passed / 1 slow test skipped.
+- Tests: web 68/68, firmware 46/46 (413 checks), Python 150 passed / 1 slow test skipped.
+- Cross-implementation: firmware C++, Python and the web demo's TypeScript share one generator
+  (`hookpilot-synth-v1`) and one classifier rule set with the firmware defaults. The TS generator matches Python
+  within 5.6e-17 N (10,779/10,800 fixture samples bit-identical). TS and Python agree on result, reason and
+  rule-trace text for every committed fixture (360 classifier windows, 320 engine runs). Web-demo records
+  replay from (scenario, seed) in Python (`signal_match`), and so do the firmware's.
 - Simulation report (`tests/reports/simulation_report.md`): bite recall 85.7% (257/300) at the provisional
   1.0 N trigger; 0/1500 false triggers on synthetic non-bite scenarios; all safety scenarios ended in SAFE_STOP.
   These numbers only show the rules behave as designed on synthetic signals — they say nothing about real water.
 
 ## Known gaps (honest)
-- Web demo uses its own synthetic generator (`hookpilot-web-synth-v1`) and thresholds tuned to it; firmware and
-  Python share another generator and firmware thresholds. Aligning them is the next task.
+- Rule traces are not byte-identical in all three yet. Python and the web demo start a candidate's trace with a
+  `t=… TRIGGER …` line. Firmware writes no such line but appends `interrupted by safety: …` / `state=… interrupted`
+  lines when SAFE_STOP cuts in. For a sensor fault while monitoring, firmware logs its own wording.
+  The rule lines (window, R0–R5) are identical. Result, reason and features match.
+- The actuation and safety models still differ between implementations, and so do record layouts outside
+  classification. Examples: the web demo adds simulated line load during actuation, firmware rounds samples to 4
+  decimals, and dwell times differ. Only signal + classification are cross-checked.
+- The web demo's first record per scenario is compared. Later candidates in the same run (after re-arm) are
+  firmware-style behaviour that the Python reference engine, which makes one decision per window, does not model.
 - ESP32 drivers never compiled with a real toolchain; pinout provisional; no secure-element signing.
 - Konnex SDK repo (github.com/konnex-world/konnex) unreachable on 2026-10-18 — adapter is a labeled mock. See
   `docs/konnex-docs-findings.md` and `docs/konnex-integration.md`.
