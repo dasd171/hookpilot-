@@ -1,0 +1,579 @@
+{
+  "provenance": {
+    "label": "SIMULATION \u2013 synthetic signals, Python reference engine; not field data",
+    "generated_utc": "2026-10-18T11:57:17Z",
+    "python": "3.12.15",
+    "platform": "Linux-6.12.110+-aarch64-with-glibc2.41",
+    "generator": "hookpilot-synth-v1",
+    "classifier": "deterministic-baseline-v1",
+    "implementation": "python-port-of-firmware-cpp@2026-10-18",
+    "thresholds": {
+      "variant": "fw",
+      "trigger_delta_n": 1.0,
+      "confirm_min_ms": 300.0,
+      "min_rate_n_per_s": 2.0,
+      "max_osc": 4,
+      "manual_handling_delta_n": 5.0,
+      "max_duration_ms": 8000.0,
+      "decision_window_ms": 600.0,
+      "osc_band_n": 0.25,
+      "baseline_alpha": 0.002,
+      "smoothing_alpha": 0.35,
+      "rate_lag_samples": 5,
+      "variance_window_samples": 25,
+      "detrend_window_samples": 5,
+      "release_ratio": 0.5,
+      "rearm_quiet_ms": 300.0,
+      "sensor_min_n": -5.0,
+      "sensor_max_n": 49.9,
+      "stuck_samples": 15,
+      "status": "provisional \u2013 derive from calibration + labeled data"
+    },
+    "safety_limits": {
+      "retrieval_force_limit_n": 8.0,
+      "hard_max_tension_n": 20.0,
+      "over_tension_samples": 2,
+      "sensor_min_n": -5.0,
+      "sensor_max_n": 49.9,
+      "stuck_samples": 15,
+      "hook_set_timeout_ms": 500.0,
+      "retrieval_timeout_ms": 4000.0,
+      "hook_set_travel_limit_mm": 15.0,
+      "stall_current_a": 1.8,
+      "stall_window_ms": 200.0,
+      "stall_min_progress_m": 0.005,
+      "stall_grace_ms": 200.0,
+      "comm_timeout_ms": 300.0,
+      "undervoltage_v": 10.5,
+      "nominal_battery_v": 11.1,
+      "assist_pause_n": 6.0,
+      "actuator_gap_ms": 40.0,
+      "status": "provisional \u2013 set from bench calibration and mechanism tests"
+    },
+    "seeds_per_scenario": 300,
+    "seed_range": [
+      1,
+      300
+    ],
+    "scenarios": [
+      "idle",
+      "bite",
+      "noise_current",
+      "rod_vibration",
+      "manual_handling",
+      "sensor_failure",
+      "excessive_tension",
+      "motor_stall",
+      "comm_loss"
+    ],
+    "positive_scenarios": [
+      "bite",
+      "excessive_tension",
+      "motor_stall",
+      "comm_loss"
+    ],
+    "negative_scenarios": [
+      "idle",
+      "noise_current",
+      "rod_vibration",
+      "manual_handling",
+      "sensor_failure"
+    ],
+    "sweep_seeds_per_scenario": 150,
+    "runtime_s": 56.7,
+    "command": "python tools/gen_report.py --seeds 300 --sweep-seeds 150"
+  },
+  "metrics": {
+    "per_scenario": {
+      "idle": {
+        "n": 300,
+        "results": {
+          "no_event": 300
+        },
+        "confirmed": 0,
+        "class_match": 300,
+        "class_accuracy": 1.0,
+        "test_pass": 300
+      },
+      "bite": {
+        "n": 300,
+        "results": {
+          "bite_candidate_confirmed": 257,
+          "no_event": 23,
+          "rejected_noise": 5,
+          "rejected_transient": 15
+        },
+        "confirmed": 257,
+        "class_match": 257,
+        "class_accuracy": 0.8567,
+        "test_pass": 257
+      },
+      "noise_current": {
+        "n": 300,
+        "results": {
+          "no_event": 74,
+          "rejected_noise": 226
+        },
+        "confirmed": 0,
+        "class_match": 300,
+        "class_accuracy": 1.0,
+        "test_pass": 300
+      },
+      "rod_vibration": {
+        "n": 300,
+        "results": {
+          "no_event": 50,
+          "rejected_noise": 1,
+          "rejected_transient": 1,
+          "rejected_vibration": 248
+        },
+        "confirmed": 0,
+        "class_match": 248,
+        "class_accuracy": 0.8267,
+        "test_pass": 300
+      },
+      "manual_handling": {
+        "n": 300,
+        "results": {
+          "rejected_manual_handling": 300
+        },
+        "confirmed": 0,
+        "class_match": 300,
+        "class_accuracy": 1.0,
+        "test_pass": 300
+      },
+      "sensor_failure": {
+        "n": 300,
+        "results": {
+          "rejected_sensor_fault": 300
+        },
+        "confirmed": 0,
+        "class_match": 300,
+        "class_accuracy": 1.0,
+        "test_pass": 300
+      },
+      "excessive_tension": {
+        "n": 300,
+        "results": {
+          "bite_candidate_confirmed": 300
+        },
+        "confirmed": 300,
+        "class_match": 300,
+        "class_accuracy": 1.0,
+        "test_pass": 300
+      },
+      "motor_stall": {
+        "n": 300,
+        "results": {
+          "bite_candidate_confirmed": 300
+        },
+        "confirmed": 300,
+        "class_match": 300,
+        "class_accuracy": 1.0,
+        "test_pass": 300
+      },
+      "comm_loss": {
+        "n": 300,
+        "results": {
+          "bite_candidate_confirmed": 300
+        },
+        "confirmed": 300,
+        "class_match": 300,
+        "class_accuracy": 1.0,
+        "test_pass": 300
+      }
+    },
+    "recall_bite": {
+      "confirmed": 257,
+      "n": 300,
+      "recall": 0.8567,
+      "wilson95": [
+        0.8125,
+        0.8918
+      ]
+    },
+    "recall_all_positive_scenarios": {
+      "confirmed": 1157,
+      "n": 1200,
+      "recall": 0.9642,
+      "wilson95": [
+        0.9521,
+        0.9733
+      ]
+    },
+    "false_trigger": {
+      "false_triggers": 0,
+      "n": 1500,
+      "rate": 0.0,
+      "wilson95": [
+        0.0,
+        0.0026
+      ],
+      "by_scenario": {
+        "idle": {
+          "n": 300,
+          "false_triggers": 0,
+          "rate": 0.0,
+          "wilson95": [
+            0.0,
+            0.0126
+          ]
+        },
+        "noise_current": {
+          "n": 300,
+          "false_triggers": 0,
+          "rate": 0.0,
+          "wilson95": [
+            0.0,
+            0.0126
+          ]
+        },
+        "rod_vibration": {
+          "n": 300,
+          "false_triggers": 0,
+          "rate": 0.0,
+          "wilson95": [
+            0.0,
+            0.0126
+          ]
+        },
+        "manual_handling": {
+          "n": 300,
+          "false_triggers": 0,
+          "rate": 0.0,
+          "wilson95": [
+            0.0,
+            0.0126
+          ]
+        },
+        "sensor_failure": {
+          "n": 300,
+          "false_triggers": 0,
+          "rate": 0.0,
+          "wilson95": [
+            0.0,
+            0.0126
+          ]
+        }
+      }
+    },
+    "latency_ms": {
+      "trigger_to_decision": {
+        "n": 257,
+        "mean": 580.0,
+        "p50": 580.0,
+        "p95": 580.0,
+        "min": 580.0,
+        "max": 580.0
+      },
+      "true_onset_to_decision": {
+        "n": 257,
+        "mean": 663.191,
+        "p50": 660.0,
+        "p95": 720.0,
+        "min": 620.0,
+        "max": 760.0
+      }
+    },
+    "bite_recall_by_ground_truth": {
+      "amp1.0-1.5N": {
+        "confirmed": 67,
+        "n": 79,
+        "recall": 0.8481
+      },
+      "amp<1.0N": {
+        "confirmed": 0,
+        "n": 31,
+        "recall": 0.0
+      },
+      "amp>=1.5N": {
+        "confirmed": 190,
+        "n": 190,
+        "recall": 1.0
+      },
+      "hold400-800ms": {
+        "confirmed": 77,
+        "n": 86,
+        "recall": 0.8953
+      },
+      "hold<400ms": {
+        "confirmed": 47,
+        "n": 62,
+        "recall": 0.7581
+      },
+      "hold>=800ms": {
+        "confirmed": 133,
+        "n": 152,
+        "recall": 0.875
+      }
+    },
+    "safety_scenarios": {
+      "sensor_failure": {
+        "n": 300,
+        "expected_fault_latched": 300,
+        "rate": 1.0,
+        "ended_in_SAFE_STOP": 300,
+        "detection_latency_ms_after_condition_onset": {
+          "n": 0
+        }
+      },
+      "excessive_tension": {
+        "n": 300,
+        "expected_fault_latched": 300,
+        "rate": 1.0,
+        "ended_in_SAFE_STOP": 300,
+        "detection_latency_ms_after_condition_onset": {
+          "n": 300,
+          "mean": 20.0,
+          "p50": 20.0,
+          "p95": 20.0,
+          "min": 20.0,
+          "max": 20.0
+        }
+      },
+      "motor_stall": {
+        "n": 300,
+        "expected_fault_latched": 300,
+        "rate": 1.0,
+        "ended_in_SAFE_STOP": 300,
+        "detection_latency_ms_after_condition_onset": {
+          "n": 300,
+          "mean": 180.0,
+          "p50": 180.0,
+          "p95": 180.0,
+          "min": 180.0,
+          "max": 180.0
+        }
+      },
+      "comm_loss": {
+        "n": 300,
+        "expected_fault_latched": 300,
+        "rate": 1.0,
+        "ended_in_SAFE_STOP": 300,
+        "detection_latency_ms_after_condition_onset": {
+          "n": 300,
+          "mean": 300.0,
+          "p50": 300.0,
+          "p95": 300.0,
+          "min": 300.0,
+          "max": 300.0
+        }
+      }
+    },
+    "invariants": {
+      "records": 2700,
+      "schema_validated": 2700,
+      "schema_valid": 2700,
+      "hash_and_chain_ok": 2700,
+      "replayed": 2700,
+      "replay_ok": 2700,
+      "simultaneous_actuation": 0,
+      "actuation_while_disarmed": 0,
+      "fish_landed": {
+        "unknown": 2700
+      }
+    }
+  },
+  "threshold_sweep": [
+    {
+      "trigger_delta_n": 0.6,
+      "window_ms": 400.0,
+      "recall": 1.0,
+      "false_trigger_rate": 0.0213,
+      "tp": 150,
+      "n_pos": 150,
+      "fp": 16,
+      "n_neg": 750
+    },
+    {
+      "trigger_delta_n": 0.6,
+      "window_ms": 600.0,
+      "recall": 1.0,
+      "false_trigger_rate": 0.0,
+      "tp": 150,
+      "n_pos": 150,
+      "fp": 0,
+      "n_neg": 750
+    },
+    {
+      "trigger_delta_n": 0.6,
+      "window_ms": 800.0,
+      "recall": 1.0,
+      "false_trigger_rate": 0.0,
+      "tp": 150,
+      "n_pos": 150,
+      "fp": 0,
+      "n_neg": 750
+    },
+    {
+      "trigger_delta_n": 0.8,
+      "window_ms": 400.0,
+      "recall": 0.9333,
+      "false_trigger_rate": 0.02,
+      "tp": 140,
+      "n_pos": 150,
+      "fp": 15,
+      "n_neg": 750
+    },
+    {
+      "trigger_delta_n": 0.8,
+      "window_ms": 600.0,
+      "recall": 0.9333,
+      "false_trigger_rate": 0.0,
+      "tp": 140,
+      "n_pos": 150,
+      "fp": 0,
+      "n_neg": 750
+    },
+    {
+      "trigger_delta_n": 0.8,
+      "window_ms": 800.0,
+      "recall": 0.9333,
+      "false_trigger_rate": 0.0,
+      "tp": 140,
+      "n_pos": 150,
+      "fp": 0,
+      "n_neg": 750
+    },
+    {
+      "trigger_delta_n": 1.0,
+      "window_ms": 400.0,
+      "recall": 0.86,
+      "false_trigger_rate": 0.0173,
+      "tp": 129,
+      "n_pos": 150,
+      "fp": 13,
+      "n_neg": 750
+    },
+    {
+      "trigger_delta_n": 1.0,
+      "window_ms": 600.0,
+      "recall": 0.86,
+      "false_trigger_rate": 0.0,
+      "tp": 129,
+      "n_pos": 150,
+      "fp": 0,
+      "n_neg": 750
+    },
+    {
+      "trigger_delta_n": 1.0,
+      "window_ms": 800.0,
+      "recall": 0.86,
+      "false_trigger_rate": 0.0,
+      "tp": 129,
+      "n_pos": 150,
+      "fp": 0,
+      "n_neg": 750
+    },
+    {
+      "trigger_delta_n": 1.2,
+      "window_ms": 400.0,
+      "recall": 0.7133,
+      "false_trigger_rate": 0.008,
+      "tp": 107,
+      "n_pos": 150,
+      "fp": 6,
+      "n_neg": 750
+    },
+    {
+      "trigger_delta_n": 1.2,
+      "window_ms": 600.0,
+      "recall": 0.7133,
+      "false_trigger_rate": 0.0,
+      "tp": 107,
+      "n_pos": 150,
+      "fp": 0,
+      "n_neg": 750
+    },
+    {
+      "trigger_delta_n": 1.2,
+      "window_ms": 800.0,
+      "recall": 0.7133,
+      "false_trigger_rate": 0.0,
+      "tp": 107,
+      "n_pos": 150,
+      "fp": 0,
+      "n_neg": 750
+    }
+  ],
+  "variant_comparison": {
+    "fw": {
+      "recall_bite": 0.86,
+      "false_trigger_rate": 0.0,
+      "results": {
+        "idle": {
+          "no_event": 150
+        },
+        "bite": {
+          "bite_candidate_confirmed": 129,
+          "rejected_transient": 5,
+          "rejected_noise": 3,
+          "no_event": 13
+        },
+        "noise_current": {
+          "rejected_noise": 113,
+          "no_event": 37
+        },
+        "rod_vibration": {
+          "rejected_vibration": 124,
+          "no_event": 25,
+          "rejected_transient": 1
+        },
+        "manual_handling": {
+          "rejected_manual_handling": 150
+        },
+        "sensor_failure": {
+          "rejected_sensor_fault": 150
+        },
+        "excessive_tension": {
+          "bite_candidate_confirmed": 150
+        },
+        "motor_stall": {
+          "bite_candidate_confirmed": 150
+        },
+        "comm_loss": {
+          "bite_candidate_confirmed": 150
+        }
+      }
+    },
+    "web": {
+      "recall_bite": 0.84,
+      "false_trigger_rate": 0.2,
+      "results": {
+        "idle": {
+          "no_event": 150
+        },
+        "bite": {
+          "bite_candidate_confirmed": 126,
+          "rejected_transient": 4,
+          "no_event": 20
+        },
+        "noise_current": {
+          "no_event": 150
+        },
+        "rod_vibration": {
+          "rejected_vibration": 82,
+          "rejected_transient": 39,
+          "no_event": 27,
+          "rejected_noise": 2
+        },
+        "manual_handling": {
+          "bite_candidate_confirmed": 150
+        },
+        "sensor_failure": {
+          "rejected_manual_handling": 83,
+          "rejected_sensor_fault": 67
+        },
+        "excessive_tension": {
+          "bite_candidate_confirmed": 150
+        },
+        "motor_stall": {
+          "bite_candidate_confirmed": 150
+        },
+        "comm_loss": {
+          "bite_candidate_confirmed": 150
+        }
+      }
+    }
+  }
+}
