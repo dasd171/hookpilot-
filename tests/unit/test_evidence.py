@@ -1,0 +1,163 @@
+"""Schema, hash chain, raw data integrity, replay, export, engine invariants."""
+import copy
+import csv
+import json
+import os
+
+import pytest
+
+from evidence_service.chain import verify_records
+from evidence_service.engine import EventLog, build_event
+from evidence_service.export import to_csv
+from evidence_service.replay import replay
+from evidence_service.safety import SafetyController, SafetyLimits
+from evidence_service.schema import validate_record
+from evidence_service.synth import SCENARIOS
+
+
+@pytest.fixture
+def chain(tmp_path):
+    log = EventLog()
+    for i, sc in enumerate(["bite", "rod_vibration", "motor_stall", "sensor_failure"], 1):
+        log.append(build_event(sc, 3, counter=i, raw_dir=str(tmp_path / "raw")))
+    return log.records, str(tmp_path)
+
+
+def test_all_scenarios_schema_valid():
+    for sc in SCENARIOS:
+        for armed in (True, False):
+            r = build_event(sc, 2, armed=armed)
+            r["integrity"]["record_sha256"] = "x"
+            assert validate_record(r) == [], sc
+
+
+def test_schema_catches_errors():
+    r = build_event("bite", 1)
+    bad = copy.deepcopy(r)
+    bad["outcome"]["milestones"]["fish_landed"] = "yes"
+    del bad["device"]
+    bad["timestamp"]["start_utc"] = "yesterday"
+    errs = validate_record(bad)
+    assert any("fish_landed" in e for e in errs) and any("device" in e for e in errs) and any("start_utc" in e for e in errs)
+
+
+def test_chain_verifies(chain):
+    recs, d = chain
+    assert all(c.ok for c in verify_records(recs, raw_base_dir=d))
+    assert recs[0]["integrity"]["prev_record_sha256"] is None
+    assert recs[1]["integrity"]["prev_record_sha256"] == recs[0]["integrity"]["record_sha256"]
+
+
+def test_tamper_field_breaks_hash(chain):
+    recs, d = chain
+    recs = copy.deepcopy(recs)
+    recs[1]["classification"]["result"] = "bite_candidate_confirmed"
+    c = verify_records(recs, raw_base_dir=d)
+    assert not c[1].hash_ok and c[0].ok and c[2].chain_ok
+
+
+def test_reorder_and_delete_break_chain(chain):
+    recs, d = chain
+    assert not all(c.chain_ok for c in verify_records([recs[1], recs[0]] + recs[2:], raw_base_dir=d))
+    assert not verify_records(recs[:1] + recs[2:], raw_base_dir=d)[1].chain_ok
+
+
+def test_resealing_tampered_record_still_breaks_successor(chain):
+    from evidence_service.canonical import seal
+    recs, d = chain
+    recs = copy.deepcopy(recs)
+    recs[1]["classification"]["reason"] = "edited after the fact"
+    seal(recs[1], recs[0]["integrity"]["record_sha256"])
+    c = verify_records(recs, raw_base_dir=d)
+    assert c[1].hash_ok and not c[2].chain_ok
+
+
+def test_raw_file_tamper_detected(chain):
+    recs, d = chain
+    p = os.path.join(d, recs[0]["sensor_data"]["raw_data_ref"])
+    with open(p, "a") as f:
+        f.write("9999,1\n")
+    c = verify_records(recs, raw_base_dir=d)
+    assert c[0].raw_ok is False and not c[0].ok
+
+
+def test_replay_matches_and_detects_tamper(chain):
+    recs, d = chain
+    for r in recs:
+        assert replay(r, raw_base_dir=d)["ok"], r["event_id"]
+    t = copy.deepcopy(recs[0])
+    t["sensor_data"]["samples"][10][1] += 0.5  # pre-actuation sample
+    assert replay(t)["signal_match"] is False and not replay(t)["ok"]
+    t2 = copy.deepcopy(recs[1])
+    t2["classification"]["result"] = "rejected_transient"
+    assert replay(t2)["classification_match"] is False
+    t3 = copy.deepcopy(recs[0])
+    t3["source"]["seed"] = 4
+    assert replay(t3)["signal_match"] is False
+
+
+def test_replay_bench_record_without_seed():
+    r = build_event("bite", 8)
+    r["source"] = {"mode": "bench", "scenario": None, "ground_truth_label": None}
+    rp = replay(r)
+    assert rp["signal_match"] is None and rp["classification_match"] is True and rp["ok"]
+
+
+def test_replay_from_raw_file_when_not_inlined(tmp_path):
+    r = build_event("rod_vibration", 4, raw_dir=str(tmp_path / "raw"), inline_samples=False)
+    assert "samples" not in r["sensor_data"]
+    assert replay(r, raw_base_dir=str(tmp_path))["ok"]
+
+
+def test_export_csv(chain, tmp_path):
+    recs, _ = chain
+    out = tmp_path / "x.csv"
+    assert to_csv(recs, str(out)) == 4
+    rows = list(csv.DictReader(open(out)))
+    assert rows[2]["faults"] == "MOTOR_STALL" and rows[0]["fish_landed"] == "unknown"
+
+
+# ---- engine / safety invariants -------------------------------------------------------------
+@pytest.mark.parametrize("sc", SCENARIOS)
+def test_engine_invariants(sc):
+    for seed in range(1, 21):
+        r = build_event(sc, seed)
+        m = r["outcome"]["milestones"]
+        assert m["fish_landed"] == "unknown"
+        assert r["source"]["mode"] == "simulation" and r["actuation"]["simulated"] is True
+        hook = [f["t_ms"] for f in r["actuation"]["feedback"] if f["actuator"] == "hook_set"]
+        ret = [f["t_ms"] for f in r["actuation"]["feedback"] if f["actuator"] == "retrieval"]
+        if hook and ret:
+            assert min(ret) > max(hook)
+        if r["safety"]["faults"]:
+            assert r["outcome"]["final_state"] == "SAFE_STOP" and r["safety"]["decision"] == "safe_stop"
+        if m["hook_set_completed"]:
+            assert m["bite_detected"]
+
+
+def test_disarmed_never_actuates():
+    for sc in ("bite", "excessive_tension", "motor_stall"):
+        for seed in range(1, 11):
+            r = build_event(sc, seed, armed=False)
+            assert r["actuation"]["requested"] == [] or all(f is None for f in [])
+            assert r["actuation"]["feedback"] == []
+            assert r["outcome"]["final_state"] in ("IDLE", "SAFE_STOP")
+
+
+def test_safety_controller_rules():
+    s = SafetyController(SafetyLimits(), armed=False)
+    assert not s.request("hook_set", 0, 1.0, "ok")[0]
+    s.armed = True
+    assert s.request("hook_set", 0, 1.0, "ok")[0]
+    ok, why = s.request("retrieval", 10, 1.0, "ok")
+    assert not ok and "no simultaneous" in why
+    s.release("hook_set")
+    assert not s.request("retrieval", 20, 9.0, "ok")[0]  # >= retrieval force limit
+    assert not s.request("hook_set", 20, 1.0, "stuck")[0]
+    s.latch("MOTOR_STALL", 30)
+    assert not s.request("hook_set", 40, 1.0, "ok")[0]
+    assert not s.reset(faults_cleared=False) and s.faults
+    assert s.reset(faults_cleared=True) and not s.faults and s.armed is False  # -> IDLE disarmed
+    s.battery_v = 9.0
+    s.armed = True
+    assert "undervoltage" in s.request("hook_set", 50, 1.0, "ok")[1]
