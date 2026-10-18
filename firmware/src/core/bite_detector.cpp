@@ -25,6 +25,10 @@ void DeterministicBaselineV1::beginCandidate(const ProcessedSample& trig) {
   schmitt_ = 0;
   early_manual_ = early_sensor_ = false;
   quiet_ = false;
+  char buf[200];
+  std::snprintf(buf, sizeof(buf), "t=%.0fms TRIGGER delta=%.3fN >= trigger_delta_n=%.3fN (baseline frozen at %.3fN)",
+                static_cast<double>(trig.t_ms), trig.delta, th_.trigger_delta_n, trig.baseline);
+  trigger_line_ = buf;
   update(trig);
 }
 
@@ -65,6 +69,7 @@ Classification DeterministicBaselineV1::decide() const {
   c.features = f_;
   auto& tr = c.rule_trace;
   const auto& t = th_;
+  if (!trigger_line_.empty()) tr.push_back(trigger_line_);
   tr.push_back(fmt("window: %.0f ms observed after trigger (decision_window_ms=%.0f)",
                    static_cast<double>(t_last_ - t_trigger_) + kDtMs, t.decision_window_ms));
 
