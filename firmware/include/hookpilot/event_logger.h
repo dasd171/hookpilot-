@@ -58,6 +58,10 @@ struct EventRecord {
   // features / classification
   Features features;
   Classification classification;
+  bool has_trigger = false;          // classification.trigger_t_ms (a candidate was opened)
+  uint32_t trigger_t_ms = 0;
+  bool has_decision = false;         // classification.decision_t_ms
+  uint32_t decision_t_ms = 0;
   std::string classifier = kClassifierId;
   ClassifierThresholds thresholds;
   // safety
@@ -65,6 +69,7 @@ struct EventRecord {
   bool armed = false;
   Json interlocks = Json::object();
   uint32_t faults = 0;
+  Json fault_latched_t_ms = Json::object();  // fault -> t_ms it latched (latched faults only)
   // actuation
   std::vector<RequestEntry> requested;
   std::vector<FeedbackEntry> feedback;
