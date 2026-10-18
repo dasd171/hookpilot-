@@ -19,7 +19,7 @@ Each record line shows `schema`, `hash`, `chain`, `raw`; the summary must say
 | chain | Were records removed, inserted or reordered? | `prev_record_sha256` must equal the previous record's hash; first = null (or `--genesis-prev`) |
 | raw | Does the raw data file match what the record claims? | sha256 of the file named by `sensor_data.raw_data_ref` (resolved against `--raw-dir`) |
 | replay: signal_match | (SIMULATION only) Are the samples exactly what (scenario, seed) generates? | `hookpilot-synth-v1` regeneration; only samples before the first actuation are compared (rigs add actuator load later); tolerance follows recorded precision |
-| replay: classification_match | Does the classifier reach the recorded result with the recorded thresholds? | Python port of deterministic-baseline-v1 (firmware or web variant, auto-detected) |
+| replay: classification_match | Does the classifier reach the recorded result with the recorded thresholds? | Python port of deterministic-baseline-v1 (the one firmware rule set; web-demo records use the same rules) |
 | replay: rules_consistent | Do the recorded features + thresholds imply the recorded result? | pure rule evaluation; authoritative for partial (pre-roll) windows |
 
 ## 3. Deeper checks
@@ -47,8 +47,11 @@ records (simulation records are exactly that and are labelled so). Physical trus
 data, published calibration, device identity and independent observation (docs/konnex-integration.md §6).
 
 ## 6. Known limitations of the tool
-- Classifier ports are snapshots of firmware C++ and web TS code from 2026-10-18; if those change,
-  replay can disagree until the port is updated (tests/integration/test_cross_impl.py catches this).
-- Web-demo records use `hookpilot-web-synth-v1`, which is not ported → signal check "inconclusive".
-- Firmware records lack `continuous_above_ms`; rules_consistent uses `duration_above_ms` for R5.
+- The classifier port is a snapshot of the firmware C++ from 2026-10-18; if that changes, replay can disagree
+  until the port is updated (tests/integration/test_cross_impl.py and apps/web-demo/tests/cross_impl.test.ts
+  catch this).
+- Web-demo records since 2026-10-18 name `source.generator = "hookpilot-synth-v1"` and replay fully.
+  Legacy records from the retired `hookpilot-web-synth-v1` get a skipped signal check, with a note.
+- Firmware records written before 2026-10-18 lack `continuous_above_ms`; rules_consistent then uses
+  `duration_above_ms` for R5. Current firmware records include it.
 - Only 50 Hz records are supported by the classifier ports.
