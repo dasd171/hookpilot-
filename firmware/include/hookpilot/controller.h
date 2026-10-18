@@ -40,6 +40,7 @@ struct SourceInfo {
   int64_t seed = 0;
   bool has_ground_truth = false;
   std::string ground_truth_label;
+  std::string generator;  // synthetic generator id (e.g. hookpilot-synth-v1); empty -> omitted
   int64_t utc_epoch_ms_at_boot = kSimulatedEpochMs;
   std::string clock_quality = "host_clock_simulated";
   bool simulated_actuators = true;
