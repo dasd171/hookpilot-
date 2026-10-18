@@ -87,6 +87,7 @@ Json recordToJson(const EventRecord& r) {
   if (r.has_seed) src["seed"] = static_cast<long long>(r.seed);
   if (r.has_ground_truth)
     src["ground_truth_label"] = r.ground_truth_label.empty() ? Json() : Json(r.ground_truth_label);
+  if (!r.generator.empty()) src["generator"] = r.generator;
   j["source"] = src;
 
   Json ts = Json::object();
@@ -125,6 +126,7 @@ Json recordToJson(const EventRecord& r) {
   fe["peak_delta_n"] = rnd(f.peak_delta_n);
   fe["max_rate_n_per_s"] = rnd(f.max_rate_n_per_s);
   fe["duration_above_ms"] = rnd(f.duration_above_ms, 0);
+  fe["continuous_above_ms"] = rnd(f.continuous_above_ms, 0);
   fe["short_term_variance"] = rnd(f.short_term_variance);
   fe["oscillation_count"] = f.oscillation_count;
   fe["sensor_health"] = toString(f.sensor_health);
