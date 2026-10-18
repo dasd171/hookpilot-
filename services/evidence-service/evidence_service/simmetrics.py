@@ -172,36 +172,18 @@ def compute_metrics(records: list[dict], *, validate_every: int = 1, replay_ever
     }
 
 
-def sweep(seeds: range, triggers=(0.6, 0.8, 1.0, 1.2), windows=(400.0, 600.0, 800.0), variant: str = "fw") -> list[dict]:
+def sweep(seeds: range, triggers=(0.6, 0.8, 1.0, 1.2), windows=(400.0, 600.0, 800.0)) -> list[dict]:
     """Classifier-only sensitivity sweep (no actuation) over trigger_delta_n x decision window."""
     sigs = {(s, seed): generate(s, seed).samples() for s in ("bite",) + NEGATIVE_SCENARIOS for seed in seeds}
     rows = []
     for trg in triggers:
         for w in windows:
-            th = Thresholds.defaults(variant)
+            th = Thresholds.defaults("fw")
             th.trigger_delta_n = trg
-            if variant == "fw":
-                th.decision_window_ms = w
-            else:
-                th.confirm_min_ms = w
+            th.decision_window_ms = w
             tp = sum(classify(sigs[("bite", sd)], th).result == "bite_candidate_confirmed" for sd in seeds)
             fp = sum(classify(sigs[(s, sd)], th).result == "bite_candidate_confirmed" for s in NEGATIVE_SCENARIOS for sd in seeds)
             nn = len(NEGATIVE_SCENARIOS) * len(seeds)
             rows.append({"trigger_delta_n": trg, "window_ms": w, "recall": round(tp / len(seeds), 4),
                          "false_trigger_rate": round(fp / nn, 4), "tp": tp, "n_pos": len(seeds), "fp": fp, "n_neg": nn})
     return rows
-
-
-def variant_comparison(seeds: range) -> dict:
-    """Same synthetic signals through both ports with their own defaults (classification only)."""
-    out = {}
-    for v in ("fw", "web"):
-        th = Thresholds.defaults(v)
-        res = {}
-        for s in SCENARIOS:
-            res[s] = dict(Counter(classify(generate(s, sd).samples(), th).result for sd in seeds))
-        tp = res["bite"].get("bite_candidate_confirmed", 0)
-        fp = sum(res[s].get("bite_candidate_confirmed", 0) for s in NEGATIVE_SCENARIOS)
-        out[v] = {"recall_bite": round(tp / len(seeds), 4),
-                  "false_trigger_rate": round(fp / (len(NEGATIVE_SCENARIOS) * len(seeds)), 4), "results": res}
-    return out
