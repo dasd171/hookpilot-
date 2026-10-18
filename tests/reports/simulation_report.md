@@ -2,9 +2,9 @@
 
 > **SIMULATION ONLY.** Every number below was computed by `tools/gen_report.py` from runs of the Python reference engine on synthetic `hookpilot-synth-v1` signals. The signal distributions were chosen by us (docs/synthetic-signals.md) and the classifier thresholds are provisional placeholders. These numbers say how the rules behave on our synthetic set; they say **nothing** about real fish, real water or real hardware. Do not quote them as field performance.
 
-- Generated: 2026-10-18T13:37:16Z · Python 3.12.15 · runtime 51.1 s
+- Generated: 2026-10-18T14:36:23Z · Python 3.12.15 · runtime 36.8 s
 - Classifier: `deterministic-baseline-v1` (python-port-of-firmware-cpp@2026-10-18), generator `hookpilot-synth-v1`
-- Seeds per scenario: 300 (1..300); 2700 event records total
+- Seeds per scenario: 300 (1..300); 2700 event records total (every record of every run; per-scenario classification counts use the first record of each run)
 - Reproduce: `python tools/gen_report.py --seeds 300 --sweep-seeds 150`
 
 ## Headline (provisional thresholds, synthetic data)
@@ -67,14 +67,14 @@ Misses concentrate where the synthetic pull is below `trigger_delta_n` (1.0 N) o
 | motor_stall | 300/300 | 300 | mean 180.0, p95 180.0, max 180.0 (n=300) |
 | comm_loss | 300/300 | 300 | mean 300.0, p95 300.0, max 300.0 (n=300) |
 
-Latencies are on the simulated 20 ms tick and reflect the configured debounce/timeout values (over_tension_samples, stall_window_ms, comm_timeout_ms). Real e-stop / fault response must be measured on hardware.
+Latencies are on the simulated 20 ms tick and reflect the configured debounce/timeout values (over_tension_samples, stall_window_ms, comm_timeout_ms). Condition onset: motor_stall / comm_loss = the first tick the injected fault acts (injection happens at the end of the first tick with t - retrieval start >= fault_after_retrieval_start_ms); excessive_tension = first sample above the retrieval force limit after the retrieval request (or above the hard max). Latch ticks come from safety.fault_latched_t_ms. Real e-stop / fault response must be measured on hardware.
 
 ## Evidence invariants (all records)
 
 - Schema-valid: 2700/2700 validated
 - Record hash + chain link verified: 2700/2700
 - Deterministic replay OK: 2700/2700
-- Hook-set/retrieval telemetry overlap: 0 records
+- Hook-set moving inside a retrieval active interval: 0 records
 - Actuation requested while disarmed: 0 records
 - fish_landed values: {'unknown': 2700} (never inferred)
 
@@ -99,5 +99,5 @@ The sweep shows the recall / false-trigger trade-off on synthetic data only; cho
 
 ## Implementations
 
-One rule set and one generator are shared by all three implementations: firmware C++ (ground truth), this Python port, and the web demo's TypeScript port (`hookpilot-synth-v1` + firmware defaults). Agreement is checked by tests/integration/test_cross_impl.py and apps/web-demo/tests/cross_impl.test.ts; this report itself is computed with the Python port only.
+One generator, one rule set and one engine (state machine, safety controller, actuator and line-load models, fault injection; docs/engine-spec.md) are shared by all three implementations: firmware C++ (ground truth), this Python port, and the web demo's TypeScript port. Tick-by-tick agreement is checked by tests/integration/test_cross_impl.py (firmware vs Python) and apps/web-demo/tests/cross_impl.test.ts (TS vs Python); this report itself is computed with the Python port only.
 
