@@ -1,7 +1,7 @@
 {
   "provenance": {
     "label": "SIMULATION \u2013 synthetic signals, Python reference engine; not field data",
-    "generated_utc": "2026-10-18T13:37:16Z",
+    "generated_utc": "2026-10-18T14:36:23Z",
     "python": "3.12.15",
     "platform": "Linux-6.12.110+-aarch64-with-glibc2.41",
     "generator": "hookpilot-synth-v1",
@@ -36,19 +36,25 @@
       "sensor_min_n": -5.0,
       "sensor_max_n": 49.9,
       "stuck_samples": 15,
-      "hook_set_timeout_ms": 500.0,
-      "retrieval_timeout_ms": 4000.0,
+      "sensor_fault_samples": 3,
+      "hook_set_timeout_ms": 500,
+      "retrieval_timeout_ms": 4000,
+      "hook_set_travel_min_mm": 0.0,
       "hook_set_travel_limit_mm": 15.0,
+      "hook_set_max_speed_mm_s": 80.0,
+      "retrieval_travel_limit_m": 1.5,
+      "retrieval_max_speed_m_s": 0.6,
       "stall_current_a": 1.8,
-      "stall_window_ms": 200.0,
+      "stall_window_ms": 200,
       "stall_min_progress_m": 0.005,
-      "stall_grace_ms": 200.0,
-      "comm_timeout_ms": 300.0,
+      "stall_grace_ms": 200,
+      "comm_timeout_ms": 300,
+      "hook_to_retrieval_gap_ms": 100,
       "undervoltage_v": 10.5,
-      "nominal_battery_v": 11.1,
-      "assist_pause_n": 6.0,
-      "actuator_gap_ms": 40.0,
-      "status": "provisional \u2013 set from bench calibration and mechanism tests"
+      "undervoltage_rearm_v": 10.8,
+      "undervoltage_debounce_ms": 200,
+      "over_temp_c": 70.0,
+      "status": "provisional - derive from calibration + labeled data"
     },
     "seeds_per_scenario": 300,
     "seed_range": [
@@ -80,7 +86,7 @@
       "sensor_failure"
     ],
     "sweep_seeds_per_scenario": 150,
-    "runtime_s": 51.1,
+    "runtime_s": 36.8,
     "command": "python tools/gen_report.py --seeds 300 --sweep-seeds 150"
   },
   "metrics": {
