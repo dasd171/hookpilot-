@@ -44,6 +44,7 @@ struct EventRecord {
   int64_t seed = 0;
   bool has_ground_truth = false;
   std::string ground_truth_label;   // empty with has_ground_truth -> null
+  std::string generator;            // source.generator, same field as Python/web records; empty -> omitted
   // timestamp
   uint32_t start_ms = 0, end_ms = 0;
   int64_t utc_epoch_ms_at_boot = 0;  // UTC of monotonic 0 (simulated or from NTP/RTC)
