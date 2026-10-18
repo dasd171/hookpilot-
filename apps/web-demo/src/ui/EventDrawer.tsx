@@ -7,6 +7,9 @@ interface Props {
   onClose: () => void;
 }
 
+/** display only: the record keeps full precision */
+const n3 = (v: number | undefined) => (v === undefined ? '-' : v.toFixed(3));
+
 function Sparkline({ samples }: { samples: Array<[number, number]> }) {
   if (samples.length < 2) return <p className="muted small">No valid samples recorded for this event.</p>;
   const w = 560, h = 90;
@@ -66,7 +69,7 @@ export function EventDrawer({ record: r, prev, onClose }: Props) {
           <dt>Classifier</dt>
           <dd>{r.classification.classifier}</dd>
           <dt>Scenario / seed</dt>
-          <dd>{r.source.scenario ?? '-'} / {r.source.seed ?? '-'}</dd>
+          <dd>{r.source.scenario ?? '-'} / {r.source.seed ?? '-'}{r.source.generator ? ` · ${r.source.generator}` : ''}</dd>
           <dt>Start / end (simulated clock)</dt>
           <dd className="mono">{r.timestamp.start_utc} → {r.timestamp.end_utc}</dd>
           <dt>Final state / stop reason</dt>
@@ -81,11 +84,12 @@ export function EventDrawer({ record: r, prev, onClose }: Props) {
 
         <h3>Features</h3>
         <dl className="kv">
-          <dt>baseline_n</dt><dd>{f.baseline_n} N</dd>
-          <dt>peak_delta_n</dt><dd>{f.peak_delta_n} N</dd>
-          <dt>max_rate_n_per_s</dt><dd>{f.max_rate_n_per_s} N/s</dd>
+          <dt>baseline_n</dt><dd>{n3(f.baseline_n)} N</dd>
+          <dt>peak_delta_n</dt><dd>{n3(f.peak_delta_n)} N</dd>
+          <dt>max_rate_n_per_s</dt><dd>{n3(f.max_rate_n_per_s)} N/s</dd>
           <dt>duration_above_ms</dt><dd>{f.duration_above_ms} ms</dd>
-          <dt>short_term_variance</dt><dd>{f.short_term_variance} N²</dd>
+          <dt>continuous_above_ms</dt><dd>{f.continuous_above_ms ?? '-'} ms</dd>
+          <dt>short_term_variance</dt><dd>{n3(f.short_term_variance)} N²</dd>
           <dt>oscillation_count</dt><dd>{f.oscillation_count}</dd>
           <dt>sensor_health</dt><dd>{f.sensor_health}</dd>
         </dl>
