@@ -46,7 +46,7 @@ hashes differ from the CLI even when the signal and decision are the same.
 | `fmt.ts` | C-printf / Python-compatible number formatting for rule traces |
 | `safety.ts` | SafetyController, independent of the classifier: permit/deny, interlocks, latched faults, and SAFE_STOP on any fault |
 | `actuators.ts` | Simulated hook-set (mm, travel limit) and retrieval (m) models with position and current feedback, plus jam injection |
-| `engine.ts` | State machine IDLE/MONITOR/CANDIDATE/CONFIRM/HOOK_SET/RETRIEVE/VERIFY/SAFE_STOP, plus `runScenario()` |
+| `engine.ts` | Port of the firmware controller + sim harness: state machine IDLE/MONITOR/CANDIDATE/CONFIRM/HOOK_SET/RETRIEVE/VERIFY/SAFE_STOP, sensor/comm mocks, fault injection, tick trace, `HookPilotEngine` (UI) and `runScenario()` |
 | `logger.ts`, `canonical.ts`, `sha256.ts` | Schema 1.0.0 records, canonical JSON, pure-TS sha256, hash chain, `verifyChain()` |
 | `export.ts` | JSON / CSV export |
 
@@ -57,20 +57,26 @@ R0 sensor health ok → R1 peak delta ≤ manual_handling_delta_n → R2 duratio
 R3 oscillations ≤ max_osc → R4 peak rate ≥ min_rate (otherwise `rejected_noise`) → R5 continuous duration ≥
 confirm_min_ms (otherwise `rejected_transient`) → `bite_candidate_confirmed`.
 
-Each scenario run resets the signal processor and detector. All times inside a record (samples, decision,
-actuation) are ms since the scenario start, so Python's `evidence_service.replay` can regenerate the signal
-from `(scenario, seed)` and re-run the classifier (`source.generator = "hookpilot-synth-v1"`).
-`timestamp.monotonic_ms` keeps engine time. `motor_stall` / `comm_loss` faults are injected
-`fault_after_retrieval_start_ms` after retrieval starts, as in engine.py (the comm outage lasts 2 s).
-`tests/cross_impl.test.ts` checks generator, classifier and engine against Python fixtures. Regenerate the
-fixtures with `python tools/gen_web_fixtures.py` from the repo root.
+The engine is a tick-for-tick port of the firmware controller, safety controller, host mocks and sim
+harness (`docs/engine-spec.md`), identical to the Python engine. Each scenario run gets a fresh rig that boots
+at t=0 (arming after the first tick when the operator had armed), so record times are ms since the scenario
+start and Python's `evidence_service.replay` can regenerate the signal from `(scenario, seed)`
+(`source.generator = "hookpilot-synth-v1"`). `timestamp.monotonic_ms` keeps engine time. `motor_stall` /
+`comm_loss` faults are injected `fault_after_retrieval_start_ms` after retrieval starts (acting from the next
+tick); the comm outage lasts until the scenario signal ends. `tests/cross_impl.test.ts` checks generator,
+classifier and the full per-tick engine trace against Python fixtures, which `npm test` regenerates
+(`pretest`: `python3 ../../tools/gen_web_fixtures.py`; the fixture files are gitignored).
+
+The CLI takes the firmware sim's flags: `npm run -s sim -- --scenario bite --seed 1 [--disarmed]
+[--inject estop@retrieval+60] [--set retrieval_force_limit_n=6] [--trace trace.jsonl]`.
 
 Safety rules:
 - The classifier can only *request* actuation; the safety controller decides.
 - Hook-set and retrieval are never commanded at the same time.
-- Every fault (OVER_TENSION, SENSOR_*, COMM_LOSS, MOTOR_STALL, ACTUATOR_TIMEOUT, TRAVEL_LIMIT, UNDERVOLTAGE, E_STOP) triggers SAFE_STOP and latches.
+- Every fault (OVER_TENSION, SENSOR_*, COMM_LOSS, MOTOR_STALL, ACTUATOR_TIMEOUT, TRAVEL_LIMIT, UNDERVOLTAGE, E_STOP, OVER_TEMP, INTERLOCK) triggers SAFE_STOP and latches (COMM_LOSS only while armed). Over-tension needs 2 consecutive samples, sensor faults 3.
+- Retrieval starts no earlier than 100 ms (provisional) after the hook-set stroke ends.
 - Reset works only once no fault is live, and it leaves the engine in IDLE, disarmed.
-- The engine boots IDLE and disarmed.
+- The engine boots IDLE and disarmed. A completed cycle ends in IDLE, disarmed (re-arm for the next one).
 - `fish_landed` is always `"unknown"`.
 
 ### Expected outcomes (design intent; verified by tests over 5 fixed seeds)
@@ -82,7 +88,7 @@ Python's.
 
 | Scenario | Armed result | Safety | Actuator command |
 |---|---|---|---|
-| bite | bite_candidate_confirmed | permit, full cycle → MONITOR | hook_set → retrieval |
+| bite | bite_candidate_confirmed | permit, full cycle → IDLE (disarmed) | hook_set → retrieval → hook return to rest |
 | noise_current | rejected_noise | deny | none |
 | rod_vibration | rejected_vibration | deny | none |
 | manual_handling | rejected_manual_handling | deny | none |
@@ -91,18 +97,18 @@ Python's.
 | comm_loss | bite_candidate_confirmed | safe_stop (COMM_LOSS) | stopped |
 | motor_stall | bite_candidate_confirmed | safe_stop (MOTOR_STALL) | stopped |
 
-When the engine is disarmed, a confirmed bite is **denied** and no actuator moves.
+When the engine is disarmed, a confirmed bite is logged as observation only (`disarmed_observation_only`), nothing is requested and no actuator moves.
 
 ## Record notes
-- `safety` carries two extra fields, `reason` and `checks` (the permit trace). The schema allows additional properties.
-- Samples, features and thresholds are written at full double precision. Python's canonicaliser reproduces `JSON.stringify` number text (shortest round-trip), so the hashes verify in Python. Actuator feedback values stay rounded to 3 decimals.
+- Every `actuation.requested` entry carries the safety `decision` and `decision_reason`; `safety.fault_latched_t_ms` gives the tick each fault latched.
+- Samples, features and thresholds are written at full double precision. Python's canonicaliser reproduces `JSON.stringify` number text (shortest round-trip), so the hashes verify in Python. Actuator feedback is full precision too (same values as firmware and Python).
 - `features` carries the same keys as firmware and Python records, including `continuous_above_ms`. `classification` adds `implementation`, `decision_t_ms` and `trigger_t_ms`.
 - Sensor samples taken while the sensor is disconnected (NaN) are left out of `sensor_data.samples`, because JSON has no NaN.
 
 ## Limitations
 - The synthetic distributions are invented to exercise every rule, not fitted to real bites. The thresholds are placeholders. **No classification accuracy is claimed.**
-- Only the signal and the classifier are shared with firmware/Python. The state machine, safety and actuator models are the demo's own: dwell times, simulated line load during actuation, and a 1-sample over-tension check versus firmware's 2. Records therefore differ outside `classification`/`features`.
-- Rule-trace framing: like Python, the trace starts with a `t=… TRIGGER …` line, which firmware does not write.
+- Record fields outside the shared core (device id, event id, calibration label, thresholds block layout) differ from firmware/Python records, so hashes differ; everything the engines decide is identical.
+- Slider changes (trigger, force limit) take effect from the next scenario run.
 - The browser loop runs on `requestAnimationFrame`, so it pauses in background tabs. Simulated time is the engine's tick clock, not wall time.
 - `dist/` must be served over HTTP. Browsers block ES-module scripts loaded from `file://`.
 - There is no Konnex integration, no signature (`integrity.signature = null`), and no persistence: the event log lives in memory until you export it.
