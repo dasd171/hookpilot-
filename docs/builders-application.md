@@ -49,7 +49,7 @@ sha256 hash chain. "Fish landed" is never inferred — only an independent obser
   rod vibration, manual handling, sensor failure, over-tension, motor stall, comm loss.
 - Cross-language agreement: record hashes from the TS demo and the C++ firmware sim verify in Python;
   the Python replay reproduces the firmware's classification and rule trace on all 32 records checked.
-- 125 automated tests passing. Simulation metrics are generated from actual runs: on our synthetic set
+- 150 automated tests passing. Simulation metrics are generated from actual runs: on our synthetic set
   the provisional thresholds give 85.7 % bite recall (257/300) and 0/1500 false triggers. These are
   synthetic numbers that only show the rules behave as designed, not field performance.
 
