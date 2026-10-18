@@ -45,11 +45,15 @@ sha256 hash chain. "Fish landed" is never inferred — only an independent obser
 **What is built today (verifiable in the repo):**
 - C++ firmware core with host simulation, a React/TS simulation demo, and Python services for
   evidence verification, deterministic replay, an edge bridge and a mock Konnex adapter.
-- Reproducible synthetic scenarios (mulberry32, identical in Python and C++): bites, current drift,
+- Reproducible synthetic scenarios (mulberry32, identical in Python, C++ and TS): bites, current drift,
   rod vibration, manual handling, sensor failure, over-tension, motor stall, comm loss.
-- Cross-language agreement: record hashes from the TS demo and the C++ firmware sim verify in Python;
-  the Python replay reproduces the firmware's classification and rule trace on all 32 records checked.
-- 150 automated tests passing. Simulation metrics are generated from actual runs: on our synthetic set
+- Cross-language agreement: one engine specification (state machine, safety controller, actuator models,
+  fault injection) implemented in C++, Python and TS. On 636 shared simulation cases (scenarios, fault
+  injections, parameter overrides) the firmware sim, the Python engine and the web demo produce the same
+  tick-by-tick states, faults, actuator commands and telemetry (636/636 runs each pair, within 1e-9).
+  Record hashes from the TS demo and the C++ firmware sim verify in Python, and replay reproduces them.
+- Automated tests passing on 2026-10-18: 187 Python (1 opt-in slow test skipped), 68 web, 53 firmware
+  host tests. Simulation metrics are generated from actual runs: on our synthetic set
   the provisional thresholds give 85.7 % bite recall (257/300) and 0/1500 false triggers. These are
   synthetic numbers that only show the rules behave as designed, not field performance.
 
