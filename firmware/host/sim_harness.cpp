@@ -43,6 +43,7 @@ ScenarioRunResult runScenario(const std::string& scenario, uint32_t seed, int du
   src.seed = seed;
   src.has_ground_truth = true;
   src.ground_truth_label = groundTruthLabel(scenario);
+  src.generator = kSynthGeneratorId;
   rig.ctl->setSource(src);
   // event-id randomness: deterministic per seed (SIMULATION)
   auto idrng = std::make_shared<Mulberry32>(seed ^ 0x9E3779B9u);
