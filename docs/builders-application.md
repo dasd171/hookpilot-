@@ -1,6 +1,6 @@
 # Konnex Builders application — draft answers (English)
 
-Form: https://subnets.testnet.konnex.world/builders · Draft prepared 2026-10-18 · Replace `https://raw.githack.com/dasd171/hookpilot-/main/apps/web-demo/hookpilot-demo-standalone.html`
+Form: https://subnets.testnet.konnex.world/builders · Draft prepared 2026-10-18 · Replace `https://raw.githack.com/dasd171/hookpilot-/main/apps/web-demo/hosted/index.html`
 before submitting. All claims below are limited to what exists in this repository.
 
 ---
@@ -29,7 +29,7 @@ controllers.)*
 **Stage:** Prototype — software prototype and simulation. Hardware is designed (block diagram,
 mechanical spec, BOM, provisional wiring) but **not yet built**; no field or live-fish tests.
 
-**Demo link:** https://raw.githack.com/dasd171/hookpilot-/main/apps/web-demo/hookpilot-demo-standalone.html
+**Demo link:** https://raw.githack.com/dasd171/hookpilot-/main/apps/web-demo/hosted/index.html
 
 **Team:** Solo founder.
 
