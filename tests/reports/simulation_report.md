@@ -2,7 +2,7 @@
 
 > **SIMULATION ONLY.** Every number below was computed by `tools/gen_report.py` from runs of the Python reference engine on synthetic `hookpilot-synth-v1` signals. The signal distributions were chosen by us (docs/synthetic-signals.md) and the classifier thresholds are provisional placeholders. These numbers say how the rules behave on our synthetic set; they say **nothing** about real fish, real water or real hardware. Do not quote them as field performance.
 
-- Generated: 2026-10-18T11:57:17Z · Python 3.12.15 · runtime 56.7 s
+- Generated: 2026-10-18T13:37:16Z · Python 3.12.15 · runtime 51.1 s
 - Classifier: `deterministic-baseline-v1` (python-port-of-firmware-cpp@2026-10-18), generator `hookpilot-synth-v1`
 - Seeds per scenario: 300 (1..300); 2700 event records total
 - Reproduce: `python tools/gen_report.py --seeds 300 --sweep-seeds 150`
@@ -97,14 +97,7 @@ Latencies are on the simulated 20 ms tick and reflect the configured debounce/ti
 
 The sweep shows the recall / false-trigger trade-off on synthetic data only; choosing real thresholds requires calibrated bench data and labeled field recordings (docs/calibration.md).
 
-## Implementation variants on the same synthetic signals
+## Implementations
 
-Two ports of `deterministic-baseline-v1` exist in the monorepo with different defaults (firmware C++ vs web-demo TS). Same signals, each with its own defaults:
-
-| variant | recall (bite) | false-trigger rate |
-|---|---|---|
-| fw (python-port-of-firmware-cpp@2026-10-18) | 86.0% | 0.0% |
-| web (python-port-of-web-demo-ts@2026-10-18) | 84.0% | 20.0% |
-
-The web demo's own generator (`hookpilot-web-synth-v1`) differs from `hookpilot-synth-v1`, so these web-variant numbers are NOT the web demo's behaviour on its own scenarios. Unifying the two variants is an open item (docs/testing.md).
+One rule set and one generator are shared by all three implementations: firmware C++ (ground truth), this Python port, and the web demo's TypeScript port (`hookpilot-synth-v1` + firmware defaults). Agreement is checked by tests/integration/test_cross_impl.py and apps/web-demo/tests/cross_impl.test.ts; this report itself is computed with the Python port only.
 
