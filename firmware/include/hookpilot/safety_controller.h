@@ -25,13 +25,16 @@ class DefaultSafetyController : public SafetyController {
   uint32_t activeConditions() const override { return active_; }
   bool clearFaults(const SafetyInputs& in) override;
   void latchFault(uint32_t f) override {
+    stampLatches(f & ~latched_, last_now_);
     latched_ |= f;
     armed_ = false;
   }
+  uint32_t latchTimeMs(uint32_t bit) const override;
   const SafetyLimits& limits() const override { return lim_; }
 
  private:
   uint32_t evaluate(const SafetyInputs& in);  // conditions present now (all, regardless of armed)
+  void stampLatches(uint32_t newly, uint32_t now);
 
   SafetyLimits lim_;
   bool armed_ = false;
@@ -44,6 +47,10 @@ class DefaultSafetyController : public SafetyController {
   uint32_t uv_since_ = 0;
   bool hook_was_active_ = false, retr_was_active_ = false;
   uint32_t hook_since_ = 0, retr_since_ = 0;
+  bool hook_ran_ = false;          // hook-set has been active at least once (for the retrieval gap)
+  uint32_t hook_idle_since_ = 0;   // t_ms of the update() that first saw the hook inactive again
+  uint32_t last_now_ = 0;
+  std::array<uint32_t, kFaultBitCount> latch_t_{};
   // retrieval progress history for stall detection
   struct PosSample { uint32_t t; double pos; };
   static constexpr int kHist = 64;
