@@ -46,18 +46,45 @@ def test_firmware_records_verify_and_replay(repo_root, sc, seed):
     assert res["verdict"] == "accept", [c for c in res["criteria"] if c["status"] == "fail"]
 
 
-@pytest.mark.crossimpl
-@pytest.mark.parametrize("sc", ["bite", "rod_vibration", "manual_handling"])
-def test_web_demo_records_hash_and_rules(repo_root, sc):
+def _web_records(repo_root, sc, seed, *extra):
     app = os.path.join(repo_root, "apps", "web-demo")
     if shutil.which("npm") is None or not os.path.exists(os.path.join(app, "node_modules", ".bin", "tsx")):
         pytest.skip("web demo dependencies not installed")
-    p = subprocess.run(["npm", "run", "-s", "sim", "--", "--scenario", sc, "--seed", "7"], cwd=app,
+    p = subprocess.run(["npm", "run", "-s", "sim", "--", "--scenario", sc, "--seed", str(seed), *extra], cwd=app,
                        capture_output=True, text=True, timeout=110)
     if p.returncode != 0:
         pytest.skip(f"web demo sim failed (rc={p.returncode}): {p.stderr[:200]}")
-    recs = json.loads(p.stdout)
+    return json.loads(p.stdout)
+
+
+@pytest.mark.crossimpl
+@pytest.mark.parametrize("sc", SCEN)
+@pytest.mark.parametrize("seed", [1, 7, 42])
+def test_web_demo_records_verify_and_replay(repo_root, sc, seed):
+    """Web-demo records name hookpilot-synth-v1 and use the firmware rules: fully replayable from (scenario, seed)."""
+    recs = _web_records(repo_root, sc, seed)
+    assert recs, "web demo emitted no record"
     checks = verify_records(recs)
     assert all(c.hash_ok and c.chain_ok and not c.schema_errors for c in checks), [c.to_dict() for c in checks if not c.ok]
     for r in recs:
-        assert replay(r)["rules_consistent"] in (True, None)
+        assert r["source"]["generator"] == "hookpilot-synth-v1"
+        rp = replay(r)
+        assert rp["signal_match"] is True, rp           # regenerated from (scenario, seed), not "inconclusive"
+        assert rp["classification_match"] is True, rp
+        assert rp["rules_consistent"] in (True, None), rp
+        assert rp["ok"], rp
+    # same classification, reason and rule-trace text as the Python reference engine
+    py = build_event(sc, seed)["classification"]
+    first = recs[0]["classification"]
+    assert first["result"] == py["result"]
+    assert first["reason"] == py["reason"]
+    assert first["rule_trace"] == py["rule_trace"]
+
+
+@pytest.mark.crossimpl
+@pytest.mark.parametrize("sc", ["bite", "rod_vibration", "manual_handling"])
+def test_web_demo_disarmed_records_replay(repo_root, sc):
+    recs = _web_records(repo_root, sc, 7, "--disarmed")
+    for r in recs:
+        rp = replay(r)
+        assert rp["signal_match"] is True and rp["ok"], rp
