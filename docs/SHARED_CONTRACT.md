@@ -1,0 +1,14 @@
+# Shared contract for all HookPilot modules (read before coding)
+- Units: tension in newtons (N), time in ms, sample rate default 50 Hz.
+- State machine (identical names everywhere): IDLE, MONITOR, CANDIDATE, CONFIRM, HOOK_SET, RETRIEVE, VERIFY, SAFE_STOP. Any state -> SAFE_STOP on critical fault. SAFE_STOP only exits via explicit reset (and only when faults cleared), into IDLE (disarmed).
+- Deterministic baseline classifier "deterministic-baseline-v1". Features: baseline (EMA, frozen during candidate), delta = x - baseline, rate of change, duration above trigger, short-term variance (window), oscillation count (zero-crossings of detrended signal), sensor health.
+  - Trigger: delta >= trigger_delta_n -> CANDIDATE.
+  - Confirm: delta stays >= trigger for >= confirm_min_ms AND rate peak >= min_rate AND oscillation_count <= max_osc (bites = sustained pull; current = slow drift (low rate); vibration = high oscillation, low mean delta; manual handling = very large delta > manual_handling_delta_n or very long duration > max_duration_ms; sensor fault = health != ok).
+  - All thresholds are CONFIGURABLE PLACEHOLDERS labeled "provisional – derive from calibration + labeled data". Never present them as validated.
+  - Every decision records result + human-readable reason + rule_trace.
+- Safety controller is independent of classifier; classifier can only REQUEST; safety PERMITs/DENIEs. Hook-set and retrieval never commanded simultaneously. Force limit, travel limit, actuator timeout, stall detection, sensor validity, comm-loss timeout, undervoltage, watchdog reboot -> boots into IDLE disarmed.
+- Event records follow packages/event-schema/hookpilot-event.schema.json. fish_landed is never inferred (default "unknown").
+- Canonical hash: sha256 over JSON with keys sorted recursively, separators (',',':'), with integrity.record_sha256 = "" during hashing.
+- Synthetic signals must be reproducible from (scenario, seed) using mulberry32 PRNG (TS & Python & C++ identical algorithm).
+- Everything simulated is labeled SIMULATION. No fabricated test results: reports are generated from actual runs.
+- Language: all code/docs English.
