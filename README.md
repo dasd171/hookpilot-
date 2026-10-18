@@ -9,7 +9,7 @@ performs a travel-limited hook-set followed by force-limited assisted retrieval.
 schema-validated, sha256 hash-chained evidence record that reviewers can replay. A Konnex adapter maps
 these records onto Proof-of-Physical-Work concepts (local mock; official SDK not yet reachable).
 
-**Live demo (simulation, synthetic data):** https://raw.githack.com/dasd171/hookpilot-/main/apps/web-demo/hookpilot-demo-standalone.html
+**Live demo (simulation, synthetic data):** https://raw.githack.com/dasd171/hookpilot-/main/apps/web-demo/hosted/index.html
 
 ## Repository map
 | Path | What |
