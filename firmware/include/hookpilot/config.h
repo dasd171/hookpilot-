@@ -52,7 +52,8 @@ struct SafetyLimits {
   uint32_t stall_window_ms = 200;
   double stall_min_progress_m = 0.005;
   uint32_t stall_grace_ms = 200;          // after start before stall evaluation
-  uint32_t comm_timeout_ms = 300;
+  uint32_t comm_timeout_ms = 300;        // heartbeat age above this -> COMM_LOSS (latched only while armed)
+  uint32_t hook_to_retrieval_gap_ms = 100; // minimum dead time between hook-set stop and retrieval start
   double undervoltage_v = 10.5;           // 3S Li-ion pack, ~3.5 V/cell
   double undervoltage_rearm_v = 10.8;     // hysteresis for arming
   uint32_t undervoltage_debounce_ms = 200;
@@ -65,7 +66,16 @@ struct ActuatorParams {
   double hook_set_position_tol_mm = 0.5;
   double retrieval_target_m = 1.0;
   double retrieval_speed_m_s = 0.5;
-  uint32_t verify_ms = 500;
+  uint32_t verify_ms = 500;  // VERIFY dwell after retrieval before the cycle closes
+};
+
+// Simulation-only coupling used by the host rig (and by the Python / TS ports): line tension the
+// actuators add to the load-cell reading while energised. NOT a physical model.
+struct SimCoupling {
+  double hook_set_line_load_n = 1.5;
+  double retrieval_line_load_n = 0.6;
+  double retrieval_current_base_a = 0.3;     // retrieval motor current = base + per_n * max(0, x_prev)
+  double retrieval_current_per_n_a = 0.1;
 };
 
 struct DeviceIdentity {
@@ -81,6 +91,7 @@ struct ControllerConfig {
   uint32_t preroll_ms = 500;     // samples kept before the trigger in the event record
   int max_record_samples = 400;  // cap on inlined samples per record
   int max_record_feedback = 60;  // cap on actuator feedback entries per record
+  bool observe_when_disarmed = true;  // IDLE (disarmed): classify + log, never request actuation
 };
 
 }  // namespace hp
