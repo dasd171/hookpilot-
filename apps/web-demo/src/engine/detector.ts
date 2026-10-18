@@ -127,6 +127,92 @@ export function classify(
   );
 }
 
+/** First rule-trace line of every candidate (identical text in firmware, Python and TS). */
+export function triggerLine(s: SampleFeatures, th: ClassifierThresholds): string {
+  return `t=${f0(s.t_ms)}ms TRIGGER delta=${f3(s.delta)}N >= trigger_delta_n=${f3(th.trigger_delta_n)}N (baseline frozen at ${f3(s.baseline)}N)`;
+}
+
+/**
+ * Line-by-line port of firmware DeterministicBaselineV1 with its controller-facing API
+ * (shouldTrigger / beginCandidate / update / decide / rearmed); used by the tick engine (engine.ts).
+ */
+export class FwDetector {
+  private th: ClassifierThresholds;
+  private f: CandidateFeatures = emptyFeatures();
+  private tTrigger = 0;
+  private tLast = 0;
+  private runAlive = false;
+  private schmitt = 0;
+  private trig = '';
+  private quiet = false;
+  private quietSince = 0;
+  /** true between beginCandidate() and decide() (UI only) */
+  open = false;
+
+  constructor(th: ClassifierThresholds) {
+    this.th = th;
+  }
+  shouldTrigger(s: SampleFeatures): boolean {
+    return s.valid && s.delta >= this.th.trigger_delta_n;
+  }
+  beginCandidate(s: SampleFeatures) {
+    this.f = emptyFeatures({ baseline_n: s.baseline, sensor_health: s.health });
+    this.tTrigger = this.tLast = s.t_ms;
+    this.runAlive = true;
+    this.schmitt = 0;
+    this.quiet = false;
+    this.trig = triggerLine(s, this.th);
+    this.open = true;
+    this.update(s);
+  }
+  update(s: SampleFeatures): boolean {
+    const th = this.th;
+    const f = this.f;
+    if (!s.valid) {
+      f.sensor_health = s.health;
+      return true;
+    }
+    f.peak_delta_n = Math.max(f.peak_delta_n, s.delta);
+    f.max_rate_n_per_s = Math.max(f.max_rate_n_per_s, s.rate);
+    f.short_term_variance = Math.max(f.short_term_variance, s.variance);
+    const above = s.delta >= th.trigger_delta_n;
+    if (above) f.duration_above_ms += DT_MS;
+    if (this.runAlive) {
+      if (above) f.continuous_above_ms = s.t_ms - this.tTrigger + DT_MS;
+      else this.runAlive = false;
+    }
+    if (s.detrended >= th.osc_band_n) {
+      if (this.schmitt === -1) f.oscillation_count++;
+      this.schmitt = 1;
+    } else if (s.detrended <= -th.osc_band_n) {
+      if (this.schmitt === 1) f.oscillation_count++;
+      this.schmitt = -1;
+    }
+    this.tLast = s.t_ms;
+    if (s.delta > th.manual_handling_delta_n) return true;
+    return s.t_ms - this.tTrigger + DT_MS >= th.decision_window_ms;
+  }
+  decide(): { result: ClassificationResult; reason: string; rule_trace: string[]; features: CandidateFeatures } {
+    const features = { ...this.f };
+    const c = classify(features, this.th, this.tLast - this.tTrigger + DT_MS);
+    this.open = false;
+    return { result: c.result, reason: c.reason, rule_trace: this.trig ? [this.trig, ...c.rule_trace] : [...c.rule_trace], features };
+  }
+  rearmed(s: SampleFeatures): boolean {
+    const th = this.th;
+    const below = s.valid && s.delta < th.trigger_delta_n * th.release_ratio;
+    if (!below) {
+      this.quiet = false;
+      return false;
+    }
+    if (!this.quiet) {
+      this.quiet = true;
+      this.quietSince = s.t_ms;
+    }
+    return s.t_ms - this.quietSince >= th.rearm_quiet_ms;
+  }
+}
+
 /** Python-port convention: sensor health failure while monitoring (no open candidate). */
 export function monitorSensorFaultDecision(f: SampleFeatures): Decision {
   const t = f.t_ms;
@@ -253,9 +339,7 @@ export class BiteDetector {
         this.tTrigger = this.tLast = s.t_ms;
         this.runAlive = true;
         this.schmitt = 0;
-        this.triggerTrace = [
-          `t=${f0(s.t_ms)}ms TRIGGER delta=${f3(s.delta)}N >= trigger_delta_n=${pyRepr(th.trigger_delta_n)}N (baseline frozen at ${f3(s.baseline)}N)`,
-        ];
+        this.triggerTrace = [triggerLine(s, th)];
         this.step(s); // beginCandidate() calls update(trigger); the return value is ignored
         return { kind: 'candidate_started', t_ms: s.t_ms };
       }
