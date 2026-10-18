@@ -9,14 +9,19 @@ HOOKPILOT_SLOW=1 python -m pytest -q -m slow   # re-computes the committed repor
 python tools/gen_report.py --seeds 300 --sweep-seeds 150   # regenerate tests/reports/ (≈ 1 min)
 ```
 
-Result on 2026-10-18: **125 passed, 1 skipped** (the opt-in slow reproduction test). The
-cross-implementation tests ran against the C++ firmware host sim (24 cases) and the TS web demo (3 cases)
-and passed; they skip automatically when those builds are absent.
+Result on 2026-10-18: **150 passed, 1 skipped** (the opt-in slow reproduction test). The
+cross-implementation tests ran against the C++ firmware host sim (24 cases) and the TS web demo (27 cases:
+8 scenarios × seeds 1/7/42 armed, plus 3 disarmed) and passed. They skip automatically when those builds
+are absent. `test_web_fixtures.py` fails if the web demo's Python fixtures are stale.
+
+Other suites, same day: `cd apps/web-demo && npm test` gives **68/68**, including
+`tests/cross_impl.test.ts`. `cd firmware && make test` gives **46/46 tests, 413 checks**.
 
 | Suite | What it covers |
 |---|---|
 | `tests/unit` | mulberry32 vs Node vectors; canonical JSON vs `JSON.stringify`; schema (valid + invalid examples); tamper/reorder/delete/re-seal detection; raw-file sha256; replay (match + tamper); safety-controller rules; engine invariants; every verifier criterion can fail; Konnex CLI guard; edge bridge |
-| `tests/integration` | engine → chain → bundle → mock submit/attach/execute/record/prove/verify; bundle tamper; all three CLIs as subprocesses; firmware/TS cross-checks |
+| `tests/integration` | engine → chain → bundle → mock submit/attach/execute/record/prove/verify; bundle tamper; all three CLIs as subprocesses; firmware/TS cross-checks (verify + replay with `signal_match` + same result/reason/rule trace as Python); web fixture freshness |
+| `apps/web-demo/tests/cross_impl.test.ts` | TS `hookpilot-synth-v1` vs Python samples/params (27 waveforms, ≤ 1e-9); TS classifier vs Python on 360 windows (9 scenarios × seeds 1–40); TS engine first record vs Python on 320 runs: result, reason, rule trace, features |
 | `tests/simulation` | labeled scenario set (60 seeds × 9 scenarios): metric consistency, safety-fault coverage, evidence invariants, determinism, threshold monotonicity |
 
 ## 2. Metrics
@@ -37,7 +42,7 @@ TARGETS are provisional engineering goals, **not** results. "Now" = measurable t
 | Fault coverage | fraction of fault-table rows injected and handled (SAFE_STOP + correct fault string) | 100 % of rows | sim: 4 scenarios (sensor, over-tension, stall, comm loss) | 300/300 each in simulation; remaining rows (E_STOP, UNDERVOLTAGE, OVER_TEMP, WATCHDOG, TIMEOUT, TRAVEL) need firmware/hardware tests |
 | Fault detection latency | condition onset → fault latched | over-tension ≤ 60 ms, stall ≤ 300 ms, comm loss ≤ 350 ms | sim: yes | 20 / 180 / 300 ms on the 20 ms simulated tick (reflects configured debounce) |
 | Evidence completeness | records passing all verifier criteria / all records | 100 % | sim: yes | 2700/2700 schema-valid, hash+chain ok, replay ok; mock bundles score 11/11 |
-| Cross-implementation agreement | firmware sim records reproduced by Python replay | 100 % | yes | 32/32 firmware records: signal, classification and rule-trace text identical |
+| Cross-implementation agreement | firmware / web-demo records reproduced by Python replay; TS vs Python decisions | 100 % | yes | 32/32 firmware records: signal, classification and rule-trace text identical. Web demo: 48/48 records (8 scenarios × seeds 1/7/42, armed + disarmed) replay with `signal_match`. TS vs Python on seeds 1–300: 2700/2700 classifier windows and 2400/2400 engine first records with identical result, reason and rule trace (one-off check, 2026-10-18; the committed tests cover seeds 1–40) |
 
 ## 3. Interpretation rules
 - Every simulation number comes from `tools/gen_report.py` output; nothing is typed by hand.
@@ -46,11 +51,14 @@ TARGETS are provisional engineering goals, **not** results. "Now" = measurable t
   (0/31 in the 300-seed run): that is the rule, not a bug.
 - The threshold sweep shows trade-offs (e.g. a 400 ms window lets 1.7–2.1 % negatives through) —
   useful for choosing what to measure, not for choosing thresholds.
-- Variant comparison: the web-demo defaults on the same synthetic signals give 20 % false triggers,
-  all from manual handling (its manual threshold 12 N exceeds most synthetic handling pulls).
-  In the same run the web variant labels 83/150 `sensor_failure` (out-of-range, 49.99 N saturation)
-  windows as manual handling, because its out-of-range bound is `> 50 N` while firmware uses `>= 49.9 N`.
-  The variants must be unified before shared metrics are published.
+- One classifier: since 2026-10-18 the web demo uses the firmware rules and defaults and the shared generator,
+  so the report's numbers describe all three implementations' classifier on `hookpilot-synth-v1`. The
+  former web-variant comparison (20 % false triggers with its 12 N manual threshold) was removed with that
+  variant. The report's metrics did not change when it was regenerated.
+  Still not shared: the actuation/safety models (each implementation has its own), so the safety-scenario
+  rows come from the Python engine only. In a one-off check (seeds 1–300) the web engine also ended every
+  confirmed `excessive_tension` / `motor_stall` / `comm_loss` run and every `sensor_failure` run in SAFE_STOP
+  with the expected fault (300/300 each). No negative-scenario record requested actuation (0 in 900 runs).
 
 ## 4. Test plan for hardware (summary)
 1. Sensor rig: calibration sweeps, noise floor, drift, wet vs dry (docs/calibration.md).
