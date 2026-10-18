@@ -16,7 +16,7 @@ python -m evidence_service hash event.json
 |---|---|
 | `prng.py` | mulberry32 (bit-exact vs JS reference), uniform, Box–Muller gauss |
 | `synth.py` | `hookpilot-synth-v1` scenarios (docs/synthetic-signals.md) |
-| `classifier.py` | deterministic-baseline-v1 ports: `fw` (firmware C++) and `web` (web-demo TS) |
+| `classifier.py` | deterministic-baseline-v1, port of the firmware C++ (the web demo's TS is a port of the same code) |
 | `safety.py` | reference safety-controller model + limits (mirrors firmware config.h) |
 | `engine.py` | (scenario, seed) → full event record; `EventLog` hash chain; raw CSV I/O |
 | `canonical.py` | canonical JSON (JS number formatting), record hash, seal, file sha256 |
