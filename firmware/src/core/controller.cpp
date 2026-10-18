@@ -251,6 +251,7 @@ void HookPilotController::openEvent(uint32_t t_trigger) {
   ev_.seed = src_.seed;
   ev_.has_ground_truth = src_.has_ground_truth;
   ev_.ground_truth_label = src_.ground_truth_label;
+  ev_.generator = src_.generator;
   ev_.utc_epoch_ms_at_boot = src_.utc_epoch_ms_at_boot;
   ev_.clock_quality = src_.clock_quality;
   ev_.simulated = src_.simulated_actuators;
