@@ -169,7 +169,7 @@ void MockRetrieval::update(uint32_t now_ms) {
   }
   if (!enc_loss_) fb_.position += step;
   fb_.speed = speed_;
-  fb_.current_a = 0.3 + 0.1 * std::max(0.0, load_n_);
+  fb_.current_a = current_base_a + current_per_n_a * std::max(0.0, load_n_);
   fb_.status = "retrieving";
 }
 
