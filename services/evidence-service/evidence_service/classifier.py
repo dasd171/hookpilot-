@@ -1,24 +1,20 @@
-"""deterministic-baseline-v1 — Python ports of the shared rule-based bite classifier.
+"""deterministic-baseline-v1 — Python port of the ONE shared rule-based bite classifier.
 
-Two implementation variants exist in this monorepo (both named deterministic-baseline-v1):
+Line-by-line port of firmware/src/core/{signal_processor,bite_detector}.cpp (ground truth).
+apps/web-demo/src/engine/{processor,detector}.ts is a TypeScript port of the same firmware code
+(aligned 2026-10-18); tests/integration and apps/web-demo/tests/cross_impl.test.ts check that all
+three produce the same result, features and rule-trace text on hookpilot-synth-v1 scenarios.
 
-* ``fw``  — line-by-line port of firmware/src/core/{signal_processor,bite_detector}.cpp
-            (snapshot read 2026-10-18). DEFAULT: device evidence comes from firmware, and the
-            Python reference engine uses this variant.
-* ``web`` — port of apps/web-demo/src/engine/{processor,detector}.ts (snapshot 2026-10-18).
-
-They differ in decision-window semantics (fw: decision_window_ms; web: confirm_min_ms),
-rule order (both now check rate before transient; firmware changed this on 2026-10-18),
-Schmitt comparison (fw >=/<=, web >/<), out-of-range bound (fw >= max, web > max),
-initial rate lag and defaults. Replay picks the variant from the record
-(classification.implementation / thresholds keys) — see ``detect_variant``.
+The former web-demo variant (window = confirm_min_ms, manual 12 N, alpha 0.02, out-of-range > 50 N)
+was retired on 2026-10-18 when the web demo adopted the firmware rules and defaults.
+``Thresholds.variant`` stays in records ("fw") only for backward compatibility.
 
 Every threshold is a CONFIGURABLE PLACEHOLDER:
 "provisional – derive from calibration + labeled data". None is validated.
 
-Convention of the Python engine (controller code not yet published by firmware):
-a sensor-health failure while in MONITOR (no open candidate) yields
-``rejected_sensor_fault`` for the window; the first decision in a window is final.
+Convention of the Python engine (shared by the web demo): a sensor-health failure while in MONITOR
+(no open candidate) yields ``rejected_sensor_fault`` for the window; the first decision in a window is
+final. (The firmware controller records the same result via its SAFE_STOP path.)
 """
 from __future__ import annotations
 
@@ -28,18 +24,13 @@ from dataclasses import dataclass, asdict, field, fields
 CLASSIFIER_ID = "deterministic-baseline-v1"
 PROVISIONAL_NOTE = "provisional – derive from calibration + labeled data"
 DT_MS = 20.0
-IMPLEMENTATION = {"fw": "python-port-of-firmware-cpp@2026-10-18", "web": "python-port-of-web-demo-ts@2026-10-18"}
+IMPLEMENTATION = {"fw": "python-port-of-firmware-cpp@2026-10-18"}
 
 FW_DEFAULTS = dict(trigger_delta_n=1.0, confirm_min_ms=300.0, min_rate_n_per_s=2.0, max_osc=4,
                    manual_handling_delta_n=5.0, max_duration_ms=8000.0, decision_window_ms=600.0,
                    osc_band_n=0.25, baseline_alpha=0.002, smoothing_alpha=0.35, rate_lag_samples=5,
                    variance_window_samples=25, detrend_window_samples=5, release_ratio=0.5,
                    rearm_quiet_ms=300.0, sensor_min_n=-5.0, sensor_max_n=49.9, stuck_samples=15)
-WEB_DEFAULTS = dict(trigger_delta_n=1.0, confirm_min_ms=300.0, min_rate_n_per_s=5.0, max_osc=4,
-                    manual_handling_delta_n=12.0, max_duration_ms=8000.0, decision_window_ms=None,
-                    osc_band_n=0.25, baseline_alpha=0.02, smoothing_alpha=0.35, rate_lag_samples=5,
-                    variance_window_samples=25, detrend_window_samples=5, release_ratio=0.5,
-                    rearm_quiet_ms=300.0, sensor_min_n=-5.0, sensor_max_n=50.0, stuck_samples=15)
 _INT_KEYS = ("max_osc", "rate_lag_samples", "variance_window_samples", "detrend_window_samples", "stuck_samples")
 
 
@@ -67,8 +58,9 @@ class Thresholds:
 
     @classmethod
     def defaults(cls, variant: str = "fw") -> "Thresholds":
-        d = FW_DEFAULTS if variant == "fw" else WEB_DEFAULTS
-        return cls(variant=variant, **d)
+        if variant != "fw":
+            raise ValueError(f"unknown classifier variant {variant!r} (only 'fw' exists since 2026-10-18)")
+        return cls(variant="fw", **FW_DEFAULTS)
 
     def to_record(self) -> dict:
         d = {k: v for k, v in asdict(self).items() if v is not None}
@@ -78,7 +70,7 @@ class Thresholds:
     @classmethod
     def from_record(cls, d: dict | None, variant: str | None = None) -> "Thresholds":
         d = dict(d or {})
-        v = variant or d.get("variant") or ("fw" if "decision_window_ms" in d else ("web" if d else "fw"))
+        v = "fw"
         t = cls.defaults(v)
         names = {f.name for f in fields(cls)}
         for k, val in d.items():
@@ -91,16 +83,8 @@ class Thresholds:
 
 
 def detect_variant(record: dict) -> str:
-    cls = record.get("classification") or {}
-    impl = str(cls.get("implementation", ""))
-    if "web" in impl:
-        return "web"
-    if "firmware" in impl:
-        return "fw"
-    th = cls.get("thresholds") or {}
-    if th.get("variant") in ("fw", "web"):
-        return th["variant"]
-    return "fw" if "decision_window_ms" in th else ("web" if th else "fw")
+    """Only one rule set exists (firmware). Kept so replay output keeps its 'variant' key."""
+    return "fw"
 
 
 @dataclass
@@ -209,85 +193,6 @@ class FwProcessor:
         return s
 
 
-class WebProcessor:
-    """Port of SignalProcessor (TypeScript, web demo)."""
-
-    def __init__(self, th: Thresholds) -> None:
-        self.th = th
-        self.init = False
-        self.frozen = False
-        self.bl = self.sm = 0.0
-        self.sh: list[float] = []
-        self.win: list[float] = []
-        self.dwin: list[float] = []
-        self.last_raw = float("nan")
-        self.run = 0
-        self.last: _Sample | None = None
-
-    def process(self, t: float, v: float) -> _Sample:
-        th = self.th
-        health = "ok"
-        if not math.isfinite(v):
-            health = "disconnected"
-            self.run = 0
-        else:
-            self.run = self.run + 1 if v == self.last_raw else 1
-            if v < th.sensor_min_n or v > th.sensor_max_n:
-                health = "out_of_range"
-            elif self.run >= th.stuck_samples:
-                health = "stuck"
-        self.last_raw = v
-        if health != "ok" or not self.init:
-            if health == "ok" and not self.init:
-                self.init = True
-                self.bl = self.sm = v
-            elif health != "ok":
-                p = self.last
-                s = _Sample()
-                s.t_ms, s.raw, s.valid, s.health = t, v, False, health
-                s.x = p.x if p else 0.0
-                s.smoothed = p.smoothed if p else 0.0
-                s.baseline = p.baseline if p else 0.0
-                s.delta = p.delta if p else 0.0
-                s.rate = 0.0
-                s.variance = p.variance if p else 0.0
-                s.detrended = 0.0
-                self.last = s
-                return s
-        if not self.frozen:
-            self.bl += th.baseline_alpha * (v - self.bl)
-        self.sm += th.smoothing_alpha * (v - self.sm)
-        self.sh.append(self.sm)
-        if len(self.sh) > th.rate_lag_samples + 1:
-            del self.sh[0]
-        lag_n = len(self.sh) - 1
-        rate = ((self.sm - self.sh[0]) / (lag_n * DT_MS)) * 1000.0 if lag_n > 0 else 0.0
-        self.win.append(v)
-        if len(self.win) > th.variance_window_samples:
-            del self.win[0]
-        m = 0.0
-        for a in self.win:
-            m += a
-        m /= len(self.win)
-        var = 0.0
-        for a in self.win:
-            var += (a - m) * (a - m)
-        var /= len(self.win)
-        self.dwin.append(v)
-        if len(self.dwin) > th.detrend_window_samples:
-            del self.dwin[0]
-        dm = 0.0
-        for a in self.dwin:
-            dm += a
-        dm /= len(self.dwin)
-        s = _Sample()
-        s.t_ms, s.raw, s.valid, s.health = t, v, True, health
-        s.x, s.smoothed, s.baseline = v, self.sm, self.bl
-        s.delta, s.rate, s.variance, s.detrended = v - self.bl, rate, var, v - dm
-        self.last = s
-        return s
-
-
 # --------------------------------------------------------------------------------------------
 # Rule evaluation (pure functions of features; usable for rule-consistency checks)
 # --------------------------------------------------------------------------------------------
@@ -334,51 +239,22 @@ def decide_fw(f: dict, th: Thresholds, window_ms: float | None = None) -> tuple[
             f"Sustained pull ({ca:.0f} ms above trigger) with fast rise ({mr:.3f} N/s), low oscillation, healthy sensor.", tr)
 
 
-def decide_web(f: dict, th: Thresholds) -> tuple[str, str, list[str]]:
-    tr = [f"TRIGGER delta >= {th.trigger_delta_n:.2f} N; baseline frozen at {f.get('baseline_n', 0.0):.2f} N; window {th.confirm_min_ms:g} ms"]
-    h = f.get("sensor_health", "ok")
-    if h != "ok":
-        tr += [f"R1 sensor_health={h} != ok -> FAIL", "=> rejected_sensor_fault"]
-        return "rejected_sensor_fault", f'Sensor health is "{h}"; readings cannot be trusted, no actuation.', tr
-    tr.append("R1 sensor_health=ok -> pass")
-    if f["peak_delta_n"] > th.manual_handling_delta_n:
-        tr += ["R2 -> FAIL", "=> rejected_manual_handling"]
-        return "rejected_manual_handling", "Peak delta exceeds manual-handling limit.", tr
-    if f["duration_above_ms"] > th.max_duration_ms:
-        tr += ["R3 -> FAIL", "=> rejected_manual_handling"]
-        return "rejected_manual_handling", "Above-trigger duration exceeds max_duration_ms.", tr
-    if f["oscillation_count"] > th.max_osc:
-        tr += ["R4 -> FAIL", "=> rejected_vibration"]
-        return "rejected_vibration", "Oscillation count exceeds max_osc.", tr
-    if f["max_rate_n_per_s"] < th.min_rate_n_per_s:
-        tr += ["R5 -> FAIL", "=> rejected_noise"]
-        return "rejected_noise", "Slow rise: drift from current/drag, not a strike.", tr
-    if f["duration_above_ms"] < th.confirm_min_ms:
-        tr += ["R6 -> FAIL", "=> rejected_transient"]
-        return "rejected_transient", "Delta fell back below trigger: short transient.", tr
-    tr += ["R1-R6 pass", "=> bite_candidate_confirmed"]
-    return "bite_candidate_confirmed", "Sustained pull confirmed by provisional rules (not validated).", tr
-
-
 def decide_from_features(features: dict, th: Thresholds) -> str:
     """Rule re-evaluation from recorded features only (used by the rule-consistency check).
     Note: for fw, R5 needs continuous_above_ms; when a record lacks it, duration_above_ms is used."""
-    return (decide_fw(features, th) if th.variant == "fw" else decide_web(features, th))[0]
+    return decide_fw(features, th)[0]
 
 
 # --------------------------------------------------------------------------------------------
 # Streaming classifier (processor + detector)
 # --------------------------------------------------------------------------------------------
-_RANK = {"ok": 0, "degraded": 1, "stuck": 2, "out_of_range": 3, "disconnected": 4}
-
-
 class StreamingClassifier:
     def __init__(self, th: Thresholds | None = None, sample_rate_hz: float = 50.0) -> None:
         self.th = th or Thresholds.defaults("fw")
         if abs(sample_rate_hz - 50.0) > 1e-9:
             raise ValueError("deterministic-baseline-v1 ports assume 50 Hz (20 ms) samples")
         self.v = self.th.variant
-        self.proc = FwProcessor(self.th) if self.v == "fw" else WebProcessor(self.th)
+        self.proc = FwProcessor(self.th)
         self.state = "MONITOR"
         self.decision: Decision | None = None
         self.trigger_trace: list[str] = []
@@ -388,22 +264,18 @@ class StreamingClassifier:
     def _begin(self, s: _Sample) -> None:
         th = self.th
         self.t_trig = self.t_last = s.t_ms
-        self.f = {"baseline_n": s.baseline, "peak_delta_n": 0.0 if self.v == "fw" else s.delta,
-                  "max_rate_n_per_s": 0.0 if self.v == "fw" else max(0.0, s.rate),
+        self.f = {"baseline_n": s.baseline, "peak_delta_n": 0.0,
+                  "max_rate_n_per_s": 0.0,
                   "duration_above_ms": 0.0, "continuous_above_ms": 0.0,
-                  "short_term_variance": 0.0 if self.v == "fw" else s.variance,
+                  "short_term_variance": 0.0,
                   "oscillation_count": 0, "sensor_health": s.health}
         self.run_alive = True
         self.schmitt = 0
-        self.last_above = s.t_ms
         self.trigger_trace = [f"t={s.t_ms:.0f}ms TRIGGER delta={s.delta:.3f}N >= trigger_delta_n={th.trigger_delta_n}N "
                               f"(baseline frozen at {s.baseline:.3f}N)"]
         self.proc.frozen = True
         self.state = "CANDIDATE"
-        if self.v == "fw":
-            self._update_fw(s)  # beginCandidate() calls update(trigger); return value ignored
-        else:
-            self._osc_web(s.detrended)
+        self._update_fw(s)  # beginCandidate() calls update(trigger); return value ignored
 
     def _update_fw(self, s: _Sample) -> bool:
         th, f = self.th, self.f
@@ -434,44 +306,10 @@ class StreamingClassifier:
             return True
         return (s.t_ms - self.t_trig) + DT_MS >= th.decision_window_ms
 
-    def _osc_web(self, d: float) -> None:
-        band = self.th.osc_band_n
-        sg = 1 if d > band else (-1 if d < -band else 0)
-        if sg != 0:
-            if self.schmitt != 0 and sg != self.schmitt:
-                self.f["oscillation_count"] += 1
-            self.schmitt = sg
-
-    def _update_web(self, s: _Sample) -> bool:
-        th, f = self.th, self.f
-        if _RANK.get(s.health, 0) > _RANK.get(f["sensor_health"], 0):
-            f["sensor_health"] = s.health
-        if not s.valid:
-            return True
-        f["peak_delta_n"] = max(f["peak_delta_n"], s.delta)
-        f["max_rate_n_per_s"] = max(f["max_rate_n_per_s"], s.rate)
-        f["short_term_variance"] = max(f["short_term_variance"], s.variance)
-        if s.delta >= th.trigger_delta_n:
-            if self.run_alive:
-                self.last_above = s.t_ms
-        else:
-            self.run_alive = False
-        self._osc_web(s.detrended)
-        self.t_last = s.t_ms
-        if f["peak_delta_n"] > th.manual_handling_delta_n:
-            return True
-        return s.t_ms - self.t_trig + DT_MS >= th.confirm_min_ms
-
     def _finalize(self, t: float) -> Decision:
         th = self.th
-        if self.v == "fw":
-            feats = dict(self.f)
-            res, reason, tr = decide_fw(feats, th, (self.t_last - self.t_trig) + DT_MS)
-        else:
-            self.f["duration_above_ms"] = self.last_above - self.t_trig + DT_MS
-            self.f["continuous_above_ms"] = self.f["duration_above_ms"]
-            feats = dict(self.f)
-            res, reason, tr = decide_web(feats, th)
+        feats = dict(self.f)
+        res, reason, tr = decide_fw(feats, th, (self.t_last - self.t_trig) + DT_MS)
         self.decision = Decision(res, reason, self.trigger_trace + tr, t, self.t_trig, feats, variant=self.v)
         self.state = "DONE"
         return self.decision
@@ -496,7 +334,7 @@ class StreamingClassifier:
                 self.state = "DONE"
                 return self.decision
             return None
-        done = self._update_fw(s) if self.v == "fw" else self._update_web(s)
+        done = self._update_fw(s)
         if done:
             return self._finalize(t)
         return None
