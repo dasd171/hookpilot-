@@ -7,10 +7,10 @@ import os
 import pytest
 
 from evidence_service.chain import verify_records
-from evidence_service.engine import EventLog, build_event
+from evidence_service.engine import EventLog, build_event, run_scenario
 from evidence_service.export import to_csv
 from evidence_service.replay import replay
-from evidence_service.safety import SafetyController, SafetyLimits
+from evidence_service.safety import F, SafetyController, SafetyLimits
 from evidence_service.schema import validate_record
 from evidence_service.synth import SCENARIOS
 
@@ -121,43 +121,91 @@ def test_export_csv(chain, tmp_path):
 @pytest.mark.parametrize("sc", SCENARIOS)
 def test_engine_invariants(sc):
     for seed in range(1, 21):
-        r = build_event(sc, seed)
-        m = r["outcome"]["milestones"]
-        assert m["fish_landed"] == "unknown"
-        assert r["source"]["mode"] == "simulation" and r["actuation"]["simulated"] is True
-        hook = [f["t_ms"] for f in r["actuation"]["feedback"] if f["actuator"] == "hook_set"]
-        ret = [f["t_ms"] for f in r["actuation"]["feedback"] if f["actuator"] == "retrieval"]
-        if hook and ret:
-            assert min(ret) > max(hook)
-        if r["safety"]["faults"]:
-            assert r["outcome"]["final_state"] == "SAFE_STOP" and r["safety"]["decision"] == "safe_stop"
-        if m["hook_set_completed"]:
-            assert m["bite_detected"]
+        run = run_scenario(sc, seed, trace=True)
+        # hook-set and retrieval are never active in the same tick (checked on the full tick trace)
+        assert not any(t["hook"]["active"] and t["retr"]["active"] for t in run.trace)
+        for r in run.records:
+            m = r["outcome"]["milestones"]
+            assert m["fish_landed"] == "unknown"
+            assert r["source"]["mode"] == "simulation" and r["actuation"]["simulated"] is True
+            if r["safety"]["faults"]:
+                assert r["outcome"]["final_state"] == "SAFE_STOP" and r["safety"]["decision"] == "safe_stop"
+            if m["hook_set_completed"]:
+                assert m["bite_detected"]
+            for f, t in r["safety"]["fault_latched_t_ms"].items():
+                assert f in r["safety"]["faults"] and 0 <= t <= 8000
+            # retrieval is only ever requested after the hook-set stroke + the minimum gap
+            req = r["actuation"]["requested"]
+            ret = [q["t_ms"] for q in req if q["actuator"] == "retrieval"]
+            stroke = [f["t_ms"] for f in r["actuation"]["feedback"]
+                      if f["actuator"] == "hook_set" and f["status"] == "at_target"]
+            if ret:
+                assert stroke and ret[0] - stroke[0] >= SafetyLimits().hook_to_retrieval_gap_ms
 
 
 def test_disarmed_never_actuates():
     for sc in ("bite", "excessive_tension", "motor_stall"):
         for seed in range(1, 11):
-            r = build_event(sc, seed, armed=False)
-            assert r["actuation"]["requested"] == [] or all(f is None for f in [])
-            assert r["actuation"]["feedback"] == []
-            assert r["outcome"]["final_state"] in ("IDLE", "SAFE_STOP")
+            run = run_scenario(sc, seed, armed=False, trace=True)
+            assert not any(t["cmds"] for t in run.trace)
+            assert not any(t["hook"]["active"] or t["retr"]["active"] for t in run.trace)
+            for r in run.records:
+                assert r["actuation"]["requested"] == [] and r["actuation"]["feedback"] == []
+                assert r["outcome"]["final_state"] in ("IDLE", "SAFE_STOP")
+                assert r["safety"]["armed"] is False
+            first = run.records[0]
+            if first["classification"]["result"] == "bite_candidate_confirmed":
+                assert first["outcome"]["stop_reason"].startswith("disarmed_observation_only")
+
+
+class _In:
+    """Minimal SafetyInputs for unit tests."""
+    def __init__(self, raw=1.0, valid=True, health="ok"):
+        from evidence_service.engine import Feedback, SafetyInputs, empty_sample
+        s = empty_sample()
+        s.raw, s.valid, s.health = raw, valid, health
+        self.v = SafetyInputs(now_ms=0, sample=s, hook=Feedback(), retrieval=Feedback(), bus_voltage_v=11.4)
+
+    def __getattr__(self, k):
+        return getattr(self.v, k)
 
 
 def test_safety_controller_rules():
-    s = SafetyController(SafetyLimits(), armed=False)
-    assert not s.request("hook_set", 0, 1.0, "ok")[0]
-    s.armed = True
-    assert s.request("hook_set", 0, 1.0, "ok")[0]
-    ok, why = s.request("retrieval", 10, 1.0, "ok")
-    assert not ok and "no simultaneous" in why
-    s.release("hook_set")
-    assert not s.request("retrieval", 20, 9.0, "ok")[0]  # >= retrieval force limit
-    assert not s.request("hook_set", 20, 1.0, "stuck")[0]
-    s.latch("MOTOR_STALL", 30)
-    assert not s.request("hook_set", 40, 1.0, "ok")[0]
-    assert not s.reset(faults_cleared=False) and s.faults
-    assert s.reset(faults_cleared=True) and not s.faults and s.armed is False  # -> IDLE disarmed
-    s.battery_v = 9.0
-    s.armed = True
-    assert "undervoltage" in s.request("hook_set", 50, 1.0, "ok")[1]
+    s = SafetyController(SafetyLimits())
+    i = _In().v
+    assert not s.permit("hook_set", 12.0, 60.0, i).permitted          # disarmed
+    s.update(i)
+    assert s.arm(i)[0]
+    assert s.permit("hook_set", 12.0, 60.0, i).permitted
+    assert not s.permit("hook_set", 15.5, 60.0, i).permitted          # travel limit
+    assert not s.permit("hook_set", 12.0, 500.0, i).permitted         # speed limit
+    i.hook.active = True
+    s.update(i)                                                       # hook seen active at t=0
+    d = s.permit("retrieval", 1.0, 0.5, i)
+    assert not d.permitted and "mutual exclusion" in d.reason
+    i.hook.active = False
+    i.now_ms = 20
+    s.update(i)                                                       # hook seen inactive at t=20
+    i.now_ms = 60
+    d = s.permit("retrieval", 1.0, 0.5, i)
+    assert not d.permitted and "hook_to_retrieval_gap_ms" in d.reason  # 40 ms < 100 ms gap
+    i.now_ms = 120
+    assert s.permit("retrieval", 1.0, 0.5, i).permitted
+    i.sample.raw = 8.5
+    assert not s.permit("retrieval", 1.0, 0.5, i).permitted           # retrieval force limit
+    # over-tension debounce: 2 consecutive samples above hard max
+    i.sample.raw = 20.5
+    i.now_ms = 140
+    assert s.update(i) == 0
+    i.now_ms = 160
+    assert s.update(i) & F["OVER_TENSION"] and s.latch_time_ms("OVER_TENSION") == 160 and not s.armed
+    i.sample.raw = 1.0
+    i.now_ms = 180
+    s.update(i)
+    assert s.clear_faults() and s.faults == []                        # condition gone -> reset ok
+    # WATCHDOG_RESET is acknowledgement-only; COMM_LOSS only latches while armed
+    s.latch_fault(F["WATCHDOG_RESET"])
+    assert not s.arm(i)[0] and s.clear_faults() and s.arm(i)[0]
+    s.disarm()
+    i.comm_link_ok = False
+    assert s.update(i) == 0 and s.active & F["COMM_LOSS"] and not s.arm(i)[0]
