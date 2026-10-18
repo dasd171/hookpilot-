@@ -129,7 +129,7 @@ disengaged = handle free for the angler) → reel handle → reel gears → drag
 
 | Limit | How | Config name |
 |---|---|---|
-| Pause winding when line tension is high (let the drag work) | firmware, from load cell | `assist_pause_n` (6 N, Python engine) |
+| Pause winding when line tension is high (let the drag work) | not implemented in any engine (removed 2026-10-18); stop on OVER_TENSION instead | `retrieval_force_limit_n` 8 N, 2 samples (provisional) |
 | Abort retrieval on sustained over-tension | firmware safety controller | `retrieval_force_limit_n` (8 N), `over_tension_samples` (2) |
 | Absolute tension limit, any state | firmware safety controller | `hard_max_tension_n` (20 N) |
 | Motor current regulation | DRV8874 current chopping (set by IPROPI resistor) | hardware |
