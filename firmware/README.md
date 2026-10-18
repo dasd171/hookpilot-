@@ -106,10 +106,12 @@ rate, above-trigger duration, continuous run from trigger, short-term variance, 
 `bite_candidate_confirmed`. Each step is written to `rule_trace`, and the thresholds in force go into
 every record, labelled provisional.
 
-Differences from `apps/web-demo/src/engine/config.ts`, chosen so the shared synthetic scenarios separate:
-`min_rate_n_per_s` 2 (TS 5), `manual_handling_delta_n` 5 (TS 12; the synthetic manual-handling amplitude
-is 6.5–12 N), `baseline_alpha` 0.002 (TS 0.02), and an explicit `decision_window_ms` = 600. They are all
-still placeholders.
+These defaults are shared, unchanged, by the Python port (`evidence_service/classifier.py`) and by the web
+demo (`apps/web-demo/src/engine/config.ts`, aligned 2026-10-18). Examples: `min_rate_n_per_s` 2,
+`manual_handling_delta_n` 5 (the synthetic manual-handling amplitude is 6.5–12 N), `baseline_alpha` 0.002,
+`decision_window_ms` 600, and `sensor_max_n` 49.9 with `>=` meaning out of range. They are all still
+placeholders. Records carry `features.continuous_above_ms` and `source.generator` (sim harness:
+`hookpilot-synth-v1`), the same fields Python and the web demo write.
 
 ### Event records
 
