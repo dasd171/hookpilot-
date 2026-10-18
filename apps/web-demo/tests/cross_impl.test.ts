@@ -15,7 +15,7 @@ import {
   generateScenario,
   runScenario,
   type CandidateFeatures,
-  type ScenarioName,
+  type HookPilotEvent,
   type SynthScenario,
 } from '../src/engine/index';
 
@@ -117,21 +117,121 @@ describe('deterministic-baseline-v1: TS classifyWindow == Python classify (resul
   });
 });
 
-describe('TS engine records == Python classification (first record of each armed scenario run)', () => {
-  const cases = fx.classifications.filter((p) => p.scenario !== 'idle');
-  it(`${cases.length} engine runs: result, reason, rule_trace, features, generator id`, () => {
-    for (const p of cases) {
-      const ctx = `${p.scenario}/${p.seed}`;
-      const e = runScenario(p.scenario as ScenarioName, p.seed, { armed: true, maxTicks: 5000 });
-      expect(e.events.length, ctx).toBeGreaterThan(0);
-      const r = e.events[0];
-      expect(r.classification.result, ctx).toBe(p.result);
-      expect(r.classification.reason, ctx).toBe(p.reason);
-      expect(r.classification.rule_trace, ctx).toEqual(p.rule_trace);
-      if (p.decision_t_ms !== null && p.result !== 'no_event') expect(r.classification.decision_t_ms, ctx).toBe(p.decision_t_ms);
-      expectFeatures(r.features as CandidateFeatures, p.features, ctx);
-      expect(r.source.generator, ctx).toBe(GENERATOR_ID);
-      expect(r.source.seed, ctx).toBe(p.seed);
+// ---------------------------------------------------------------- tick engine (state machine + safety + actuators)
+interface EngineRunFx {
+  id: string;
+  group: 'scenario' | 'injection' | 'override';
+  scenario: SynthScenario;
+  seed: number;
+  armed: boolean;
+  injections: string[];
+  overrides: Record<string, number>;
+  trace: Array<Record<string, unknown>>;
+  records: Array<Record<string, unknown>>;
+}
+const engineFx = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/engine_reference.json', import.meta.url)), 'utf8')) as {
+  tolerance: number;
+  trace_keys: string[];
+  runs: EngineRunFx[];
+};
+
+const isNum = (v: unknown): v is number => typeof v === 'number';
+/** First difference (numbers within TOL), mirrors tools/xcompare.py value_diff. */
+function valueDiff(a: unknown, b: unknown, path: string): string | null {
+  if (isNum(a) && isNum(b)) return Math.abs(a - b) <= TOL ? null : `${path}: ${a} != ${b}`;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return `${path}: length ${a.length} != ${b.length}`;
+    for (let i = 0; i < a.length; i++) {
+      const d = valueDiff(a[i], b[i], `${path}[${i}]`);
+      if (d) return d;
     }
-  });
+    return null;
+  }
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const ka = Object.keys(a as object).sort();
+    const kb = Object.keys(b as object).sort();
+    if (ka.join() !== kb.join()) return `${path}: keys ${ka.join(',')} != ${kb.join(',')}`;
+    for (const k of ka) {
+      const d = valueDiff((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], `${path}.${k}`);
+      if (d) return d;
+    }
+    return null;
+  }
+  return a === b ? null : `${path}: ${JSON.stringify(a)} != ${JSON.stringify(b)}`;
+}
+function maxAbs(a: unknown, b: unknown): number {
+  if (isNum(a) && isNum(b)) return Math.abs(a - b);
+  if (Array.isArray(a) && Array.isArray(b)) return a.reduce((m: number, x, i) => Math.max(m, maxAbs(x, b[i])), 0);
+  if (a && b && typeof a === 'object' && typeof b === 'object')
+    return Object.keys(a as object).reduce((m, k) => Math.max(m, maxAbs((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k])), 0);
+  return 0;
+}
+
+/** tools/xcompare.py record_core */
+function recordCore(r: HookPilotEvent): Record<string, unknown> {
+  const f = r.features as Record<string, unknown>;
+  return {
+    scenario: r.source.scenario,
+    seed: r.source.seed,
+    start_ms: r.timestamp.monotonic_ms,
+    start_utc: r.timestamp.start_utc,
+    end_utc: r.timestamp.end_utc,
+    samples: r.sensor_data.samples,
+    invalid_samples_omitted: r.sensor_data.invalid_samples_omitted ?? 0,
+    features: Object.fromEntries(['baseline_n', 'peak_delta_n', 'max_rate_n_per_s', 'duration_above_ms', 'continuous_above_ms', 'short_term_variance', 'oscillation_count', 'sensor_health'].map((k) => [k, f[k]])),
+    result: r.classification.result,
+    reason: r.classification.reason,
+    rule_trace: r.classification.rule_trace,
+    trigger_t_ms: r.classification.trigger_t_ms ?? null,
+    decision_t_ms: r.classification.decision_t_ms ?? null,
+    decision: r.safety.decision,
+    armed: r.safety.armed,
+    faults: r.safety.faults,
+    fault_latched_t_ms: r.safety.fault_latched_t_ms,
+    interlocks: r.safety.interlocks,
+    requested: (r.actuation.requested ?? []).map((q) => ({ actuator: q.actuator, command: q.command, limit: q.limit, t_ms: q.t_ms, decision: q.decision, decision_reason: q.decision_reason })),
+    feedback: (r.actuation.feedback ?? []).map((q) => ({ actuator: q.actuator, t_ms: q.t_ms, position: q.position, current_a: q.current_a, tension_n: q.tension_n, status: q.status })),
+    final_state: r.outcome.final_state,
+    stop_reason: r.outcome.stop_reason,
+    milestones: r.outcome.milestones,
+  };
+}
+
+describe('tick engine: TS == Python (== firmware) for every shared case', () => {
+  it(`${engineFx.runs.length} runs: per-tick state/safety/actuator trace and records within ${engineFx.tolerance}`, () => {
+    const mismatches: string[] = [];
+    let ticks = 0;
+    let records = 0;
+    let maxDiff = 0;
+    const groups: Record<string, number> = {};
+    for (const run of engineFx.runs) {
+      groups[run.group] = (groups[run.group] ?? 0) + 1;
+      const e = runScenario(run.scenario, run.seed, { armed: run.armed, injections: run.injections, overrides: run.overrides, trace: true });
+      // decode the delta-encoded Python trace
+      let prev: Record<string, unknown> = {};
+      const py = run.trace.map((d) => (prev = { ...prev, ...d }));
+      const ts = e.trace as unknown as Array<Record<string, unknown>>;
+      let d: string | null = py.length === ts.length ? null : `trace length ${ts.length} != ${py.length}`;
+      for (let i = 0; !d && i < py.length; i++) {
+        const a = Object.fromEntries(engineFx.trace_keys.map((k) => [k, ts[i][k]]));
+        const b = Object.fromEntries(engineFx.trace_keys.map((k) => [k, py[i][k]]));
+        d = valueDiff(a, b, `tick[${i}]`);
+        maxDiff = Math.max(maxDiff, maxAbs(a, b));
+      }
+      ticks += ts.length;
+      const cores = e.events.map(recordCore);
+      if (!d) d = cores.length === run.records.length ? null : `record count ${cores.length} != ${run.records.length}`;
+      for (let i = 0; !d && i < cores.length; i++) {
+        d = valueDiff(JSON.parse(JSON.stringify(cores[i])), run.records[i], `record[${i}]`);
+        maxDiff = Math.max(maxDiff, maxAbs(cores[i], run.records[i]));
+      }
+      records += cores.length;
+      if (d) mismatches.push(`${run.id}: ${d}`);
+    }
+    console.info(
+      `engine cross-check: ${engineFx.runs.length} runs (${JSON.stringify(groups)}), ${ticks} trace lines, ${records} records, ` +
+        `${mismatches.length} mismatching runs, max |diff| = ${maxDiff}`,
+    );
+    expect(mismatches.slice(0, 5)).toEqual([]);
+  }, 180_000);
 });
