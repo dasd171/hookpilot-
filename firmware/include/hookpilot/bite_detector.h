@@ -4,6 +4,8 @@
 // any actuator or to the safety controller. All thresholds are provisional placeholders.
 #pragma once
 
+#include <string>
+
 #include "hookpilot/config.h"
 #include "hookpilot/interfaces.h"
 
@@ -19,6 +21,7 @@ class DeterministicBaselineV1 : public BiteDetector {
   Classification decide() const override;
   bool rearmed(const ProcessedSample& s) override;
   const ClassifierThresholds& thresholds() const override { return th_; }
+  uint32_t triggerTimeMs() const override { return t_trigger_; }
 
   const Features& features() const { return f_; }
 
@@ -28,6 +31,7 @@ class DeterministicBaselineV1 : public BiteDetector {
   uint32_t t_trigger_ = 0, t_last_ = 0;
   bool run_alive_ = false;  // continuous above-trigger run since the trigger is unbroken
   int schmitt_ = 0;         // -1 low, 0 unknown, +1 high
+  std::string trigger_line_;  // first rule-trace line: "t=...ms TRIGGER ..."
   bool early_manual_ = false, early_sensor_ = false;
   // re-arm tracking
   uint32_t quiet_since_ = 0;
