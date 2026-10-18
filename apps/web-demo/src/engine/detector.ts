@@ -1,21 +1,27 @@
 /**
- * BiteDetector "deterministic-baseline-v1" (see SHARED_CONTRACT.md).
+ * BiteDetector "deterministic-baseline-v1" (see docs/SHARED_CONTRACT.md).
  * Thresholds are configurable PLACEHOLDERS (provisional - derive from calibration + labeled data).
  *
- * Trigger: delta >= trigger_delta_n opens a candidate (baseline is frozen by the caller while open).
- * The candidate is observed for confirm_min_ms (early exit on sensor fault or manual-handling delta),
- * then rules are evaluated in this fixed order; the first failing rule decides the result:
- *   R1 sensor_health == ok                                   else rejected_sensor_fault
- *   R2 peak_delta <= manual_handling_delta_n                 else rejected_manual_handling
- *   R3 duration_above <= max_duration_ms                     else rejected_manual_handling
- *   R4 oscillation_count <= max_osc                          else rejected_vibration
- *   R5 max_rate >= min_rate_n_per_s                          else rejected_noise (slow drift / current)
- *   R6 duration_above (continuous) >= confirm_min_ms         else rejected_transient (fast but short)
- *   all pass                                                 -> bite_candidate_confirmed
+ * TypeScript port of firmware DeterministicBaselineV1 (firmware/src/core/bite_detector.cpp), identical
+ * to the Python port (evidence_service.classifier). One rule set for all three implementations.
+ *
+ * Trigger: valid sample with delta >= trigger_delta_n opens a candidate (the caller freezes the baseline).
+ * The candidate is observed for decision_window_ms from the trigger sample (early exit on an invalid
+ * sample or on delta > manual_handling_delta_n), then rules are evaluated in this fixed order; the first
+ * failing rule decides:
+ *   R0 sensor_health ok/degraded                          else rejected_sensor_fault
+ *   R1 peak_delta <= manual_handling_delta_n              else rejected_manual_handling
+ *   R2 duration_above <= max_duration_ms                  else rejected_manual_handling
+ *   R3 oscillation_count <= max_osc                       else rejected_vibration
+ *   R4 max_rate >= min_rate_n_per_s                       else rejected_noise (slow drift / current)
+ *   R5 continuous_above >= confirm_min_ms                 else rejected_transient
+ *   all pass                                              -> bite_candidate_confirmed
+ * Rule-trace text is byte-identical to the C++ / Python output (printf-style number formatting).
  */
 import type { ClassificationResult, SensorHealth } from '../../../../packages/shared-types/src/index';
 import type { ClassifierThresholds } from './config';
 import { DT_MS } from './config';
+import { cfix, pyRepr } from './fmt';
 import type { SampleFeatures } from './processor';
 
 export interface CandidateFeatures {
@@ -23,6 +29,8 @@ export interface CandidateFeatures {
   peak_delta_n: number;
   max_rate_n_per_s: number;
   duration_above_ms: number;
+  /** run length from the trigger sample without dropping below trigger */
+  continuous_above_ms: number;
   short_term_variance: number;
   oscillation_count: number;
   sensor_health: SensorHealth;
@@ -44,74 +52,121 @@ export type DetectorOutput =
   | { kind: 'candidate_started'; t_ms: number }
   | { kind: 'decision'; decision: Decision };
 
-const f2 = (v: number) => v.toFixed(2);
+const f0 = (v: number) => cfix(v, 0);
+const f3 = (v: number) => cfix(v, 3);
 
-const HEALTH_RANK: Record<SensorHealth, number> = { ok: 0, degraded: 1, stuck: 2, out_of_range: 3, disconnected: 4 };
-
-/** Pure rule evaluation - exported for unit tests. */
-export function classify(cf: CandidateFeatures, th: ClassifierThresholds): Omit<Decision, 'features' | 't_start_ms' | 't_decision_ms'> {
-  const trace: string[] = [];
-  const done = (result: ClassificationResult, reason: string) => {
-    trace.push(`=> ${result}`);
-    return { result, reason, rule_trace: trace };
+export function emptyFeatures(over: Partial<CandidateFeatures> = {}): CandidateFeatures {
+  return {
+    baseline_n: 0,
+    peak_delta_n: 0,
+    max_rate_n_per_s: 0,
+    duration_above_ms: 0,
+    continuous_above_ms: 0,
+    short_term_variance: 0,
+    oscillation_count: 0,
+    sensor_health: 'ok',
+    ...over,
   };
-  trace.push(`TRIGGER delta >= ${f2(th.trigger_delta_n)} N; baseline frozen at ${f2(cf.baseline_n)} N; window ${th.confirm_min_ms} ms`);
-  if (cf.sensor_health !== 'ok') {
-    trace.push(`R1 sensor_health=${cf.sensor_health} != ok -> FAIL`);
-    return done('rejected_sensor_fault', `Sensor health is "${cf.sensor_health}"; readings cannot be trusted, no actuation.`);
+}
+
+/**
+ * Pure rule evaluation (firmware DeterministicBaselineV1::decide / Python decide_fw).
+ * windowMs: observed window after the trigger; when given, the trace starts with the window line.
+ */
+export function classify(
+  cf: CandidateFeatures,
+  th: ClassifierThresholds,
+  windowMs?: number,
+): Omit<Decision, 'features' | 't_start_ms' | 't_decision_ms'> {
+  const tr: string[] = [];
+  const out = (result: ClassificationResult, reason: string) => ({ result, reason, rule_trace: tr });
+  if (windowMs !== undefined) tr.push(`window: ${f0(windowMs)} ms observed after trigger (decision_window_ms=${f0(th.decision_window_ms)})`);
+  const h = cf.sensor_health;
+  if (h !== 'ok' && h !== 'degraded') {
+    tr.push(`R0 sensor_health=${h} != ok -> FAIL`);
+    return out('rejected_sensor_fault', `Sensor health '${h}' during candidate window; no decision can be trusted.`);
   }
-  trace.push('R1 sensor_health=ok -> pass');
-  if (cf.peak_delta_n > th.manual_handling_delta_n) {
-    trace.push(`R2 peak_delta ${f2(cf.peak_delta_n)} N > manual_handling_delta ${f2(th.manual_handling_delta_n)} N -> FAIL`);
-    return done(
-      'rejected_manual_handling',
-      `Peak delta ${f2(cf.peak_delta_n)} N exceeds manual-handling limit ${f2(th.manual_handling_delta_n)} N (line likely grabbed or rod handled).`,
-    );
+  tr.push('R0 sensor_health=ok -> pass');
+  const pd = cf.peak_delta_n, mh = th.manual_handling_delta_n;
+  if (pd > mh) {
+    tr.push(`R1 peak_delta ${f3(pd)} N > manual_handling_delta_n ${f3(mh)} N -> FAIL`);
+    return out('rejected_manual_handling', `Peak delta ${f3(pd)} N exceeds manual-handling threshold ${f3(mh)} N (line handled by a person).`);
   }
-  trace.push(`R2 peak_delta ${f2(cf.peak_delta_n)} N <= manual_handling_delta ${f2(th.manual_handling_delta_n)} N -> pass`);
-  if (cf.duration_above_ms > th.max_duration_ms) {
-    trace.push(`R3 duration_above ${cf.duration_above_ms} ms > max_duration ${th.max_duration_ms} ms -> FAIL`);
-    return done('rejected_manual_handling', `Tension stayed above trigger for ${cf.duration_above_ms} ms (> ${th.max_duration_ms} ms), consistent with handling, not a bite.`);
+  tr.push(`R1 peak_delta ${f3(pd)} N <= manual_handling_delta_n ${f3(mh)} N -> pass`);
+  const da = cf.duration_above_ms;
+  if (da > th.max_duration_ms) {
+    tr.push(`R2 duration_above ${f0(da)} ms > max_duration_ms ${f0(th.max_duration_ms)} -> FAIL`);
+    return out('rejected_manual_handling', 'Above-trigger duration longer than max_duration_ms (treated as manual handling).');
   }
-  trace.push(`R3 duration_above ${cf.duration_above_ms} ms <= max_duration ${th.max_duration_ms} ms -> pass`);
-  if (cf.oscillation_count > th.max_osc) {
-    trace.push(`R4 oscillation_count ${cf.oscillation_count} > max_osc ${th.max_osc} -> FAIL`);
-    return done('rejected_vibration', `Signal oscillated ${cf.oscillation_count} times in the window (> ${th.max_osc}): rod/line vibration, not a sustained pull.`);
+  tr.push(`R2 duration_above ${f0(da)} ms <= max_duration_ms ${f0(th.max_duration_ms)} -> pass`);
+  const oc = cf.oscillation_count;
+  if (oc > th.max_osc) {
+    tr.push(`R3 oscillation_count ${f0(oc)} > max_osc ${f0(th.max_osc)} -> FAIL`);
+    return out('rejected_vibration', `Oscillation count ${f0(oc)} exceeds max_osc ${f0(th.max_osc)} (rod/wave vibration, low mean pull).`);
   }
-  trace.push(`R4 oscillation_count ${cf.oscillation_count} <= max_osc ${th.max_osc} -> pass`);
-  if (cf.max_rate_n_per_s < th.min_rate_n_per_s) {
-    trace.push(`R5 max_rate ${f2(cf.max_rate_n_per_s)} N/s < min_rate ${f2(th.min_rate_n_per_s)} N/s -> FAIL`);
-    return done(
+  tr.push(`R3 oscillation_count ${f0(oc)} <= max_osc ${f0(th.max_osc)} -> pass`);
+  const mr = cf.max_rate_n_per_s;
+  if (mr < th.min_rate_n_per_s) {
+    tr.push(`R4 max_rate ${f3(mr)} N/s < min_rate ${f3(th.min_rate_n_per_s)} N/s -> FAIL`);
+    return out(
       'rejected_noise',
-      `Tension rose slowly (peak rate ${f2(cf.max_rate_n_per_s)} N/s < ${f2(th.min_rate_n_per_s)} N/s): drift from current/drag, not a strike.`,
+      `Sustained but slow rise (peak rate ${f3(mr)} N/s < ${f3(th.min_rate_n_per_s)} N/s): current/drift, not a bite.`,
     );
   }
-  trace.push(`R5 max_rate ${f2(cf.max_rate_n_per_s)} N/s >= min_rate ${f2(th.min_rate_n_per_s)} N/s -> pass`);
-  if (cf.duration_above_ms < th.confirm_min_ms) {
-    trace.push(`R6 duration_above ${cf.duration_above_ms} ms < confirm_min ${th.confirm_min_ms} ms -> FAIL`);
-    return done('rejected_transient', `Delta fell back below trigger after ${cf.duration_above_ms} ms (< ${th.confirm_min_ms} ms): short transient.`);
+  tr.push(`R4 max_rate ${f3(mr)} N/s >= min_rate ${f3(th.min_rate_n_per_s)} N/s -> pass`);
+  const ca = cf.continuous_above_ms;
+  if (ca < th.confirm_min_ms) {
+    tr.push(`R5 continuous_above ${f0(ca)} ms < confirm_min_ms ${f0(th.confirm_min_ms)} -> FAIL`);
+    return out('rejected_transient', `Delta stayed above trigger for only ${f0(ca)} ms (< ${f0(th.confirm_min_ms)} ms): transient.`);
   }
-  trace.push(`R6 duration_above ${cf.duration_above_ms} ms >= confirm_min ${th.confirm_min_ms} ms -> pass`);
-  return done(
+  tr.push(`R5 continuous_above ${f0(ca)} ms >= confirm_min_ms ${f0(th.confirm_min_ms)} -> pass`);
+  tr.push('ALL rules pass -> bite_candidate_confirmed (thresholds provisional)');
+  return out(
     'bite_candidate_confirmed',
-    `Sustained pull: delta ${f2(cf.peak_delta_n)} N held ${cf.duration_above_ms} ms, rate ${f2(cf.max_rate_n_per_s)} N/s, ${cf.oscillation_count} oscillations. Candidate confirmed by provisional rules (not validated).`,
+    `Sustained pull (${f0(ca)} ms above trigger) with fast rise (${f3(mr)} N/s), low oscillation, healthy sensor.`,
   );
+}
+
+/** Python-port convention: sensor health failure while monitoring (no open candidate). */
+export function monitorSensorFaultDecision(f: SampleFeatures): Decision {
+  const t = f.t_ms;
+  return {
+    result: 'rejected_sensor_fault',
+    reason: `Sensor health '${f.health}' at t=${f0(t)} ms while monitoring; measurements cannot be trusted, no actuation.`,
+    rule_trace: [`t=${f0(t)}ms sensor_health=${f.health} while MONITOR (no candidate open) -> FAIL`],
+    features: emptyFeatures({ baseline_n: f.baseline, short_term_variance: f.variance, sensor_health: f.health }),
+    t_start_ms: t,
+    t_decision_ms: t,
+  };
+}
+
+/** Python-port convention: no candidate in the whole window. */
+export function noEventDecision(tEnd: number, th: ClassifierThresholds, last: SampleFeatures | null): Decision {
+  return {
+    result: 'no_event',
+    reason: `delta never reached trigger_delta_n ${pyRepr(th.trigger_delta_n)} N in the window`,
+    rule_trace: [`t=${f0(tEnd)}ms no candidate in window`],
+    features: emptyFeatures({
+      baseline_n: last ? last.baseline : 0,
+      short_term_variance: last ? last.variance : 0,
+      sensor_health: last ? last.health : 'ok',
+    }),
+    t_start_ms: tEnd,
+    t_decision_ms: tEnd,
+  };
 }
 
 export class BiteDetector {
   private th: ClassifierThresholds;
   phase: DetectorPhase = 'ready';
-  private tStart = 0;
-  private baselineAtTrigger = 0;
-  private peakDelta = 0;
-  private maxRate = 0;
-  private continuous = true;
-  private lastAboveT = 0;
-  private oscState = 0; // -1, 0, +1
-  private oscCount = 0;
-  private maxVar = 0;
-  private worstHealth: SensorHealth = 'ok';
-  private quietMs = 0;
+  private f: CandidateFeatures = emptyFeatures();
+  private tTrigger = 0;
+  private tLast = 0;
+  private runAlive = false;
+  private schmitt = 0; // -1 low, 0 unknown, +1 high
+  private triggerTrace: string[] = [];
+  private quiet = false;
+  private quietSince = 0;
 
   constructor(th: ClassifierThresholds) {
     this.th = th;
@@ -121,85 +176,93 @@ export class BiteDetector {
   }
   reset() {
     this.phase = 'ready';
-    this.quietMs = 0;
+    this.quiet = false;
   }
   get inCandidate() {
     return this.phase === 'candidate';
   }
 
-  private currentFeatures(): CandidateFeatures {
-    return {
-      baseline_n: this.baselineAtTrigger,
-      peak_delta_n: this.peakDelta,
-      max_rate_n_per_s: this.maxRate,
-      duration_above_ms: this.lastAboveT - this.tStart + DT_MS,
-      short_term_variance: this.maxVar,
-      oscillation_count: this.oscCount,
-      sensor_health: this.worstHealth,
-    };
-  }
-
-  /** Force a decision on the open candidate (e.g. safe stop or operator abort). */
+  /** Force a decision on the open candidate (end of the scenario window, safe stop or operator abort). */
   forceDecision(tMs: number): Decision | null {
     if (this.phase !== 'candidate') return null;
     return this.decide(tMs);
   }
 
   private decide(tMs: number): Decision {
-    const features = this.currentFeatures();
-    const c = classify(features, this.th);
+    const features = { ...this.f };
+    const c = classify(features, this.th, this.tLast - this.tTrigger + DT_MS);
     this.phase = 'refractory';
-    this.quietMs = 0;
-    return { ...c, features, t_start_ms: this.tStart, t_decision_ms: tMs };
+    this.quiet = false;
+    return { result: c.result, reason: c.reason, rule_trace: [...this.triggerTrace, ...c.rule_trace], features, t_start_ms: this.tTrigger, t_decision_ms: tMs };
   }
 
-  update(f: SampleFeatures): DetectorOutput {
+  /** firmware DeterministicBaselineV1::update - returns true when the candidate window is complete. */
+  private step(s: SampleFeatures): boolean {
+    const th = this.th;
+    const f = this.f;
+    if (!s.valid) {
+      f.sensor_health = s.health;
+      return true;
+    }
+    f.peak_delta_n = Math.max(f.peak_delta_n, s.delta);
+    f.max_rate_n_per_s = Math.max(f.max_rate_n_per_s, s.rate);
+    f.short_term_variance = Math.max(f.short_term_variance, s.variance);
+    const above = s.delta >= th.trigger_delta_n;
+    if (above) f.duration_above_ms += DT_MS;
+    if (this.runAlive) {
+      if (above) f.continuous_above_ms = s.t_ms - this.tTrigger + DT_MS;
+      else this.runAlive = false;
+    }
+    if (s.detrended >= th.osc_band_n) {
+      if (this.schmitt === -1) f.oscillation_count++;
+      this.schmitt = 1;
+    } else if (s.detrended <= -th.osc_band_n) {
+      if (this.schmitt === 1) f.oscillation_count++;
+      this.schmitt = -1;
+    }
+    this.tLast = s.t_ms;
+    if (s.delta > th.manual_handling_delta_n) return true;
+    return s.t_ms - this.tTrigger + DT_MS >= th.decision_window_ms;
+  }
+
+  /** firmware DeterministicBaselineV1::rearmed */
+  private rearmed(s: SampleFeatures): boolean {
+    const th = this.th;
+    const below = s.valid && s.delta < th.trigger_delta_n * th.release_ratio;
+    if (!below) {
+      this.quiet = false;
+      return false;
+    }
+    if (!this.quiet) {
+      this.quiet = true;
+      this.quietSince = s.t_ms;
+    }
+    return s.t_ms - this.quietSince >= th.rearm_quiet_ms;
+  }
+
+  update(s: SampleFeatures): DetectorOutput {
     const th = this.th;
     if (this.phase === 'refractory') {
-      if (f.valid && f.delta < th.trigger_delta_n * th.release_ratio) this.quietMs += DT_MS;
-      else this.quietMs = 0;
-      if (this.quietMs >= th.rearm_quiet_ms) this.phase = 'ready';
+      if (this.rearmed(s)) this.phase = 'ready';
       return { kind: 'none' };
     }
     if (this.phase === 'ready') {
-      if (f.valid && f.delta >= th.trigger_delta_n) {
+      if (s.valid && s.delta >= th.trigger_delta_n) {
         this.phase = 'candidate';
-        this.tStart = f.t_ms;
-        this.baselineAtTrigger = f.baseline;
-        this.peakDelta = f.delta;
-        this.maxRate = Math.max(0, f.rate);
-        this.continuous = true;
-        this.lastAboveT = f.t_ms;
-        this.oscState = 0;
-        this.oscCount = 0;
-        this.maxVar = f.variance;
-        this.worstHealth = f.health;
-        this.trackOsc(f.detrended);
-        return { kind: 'candidate_started', t_ms: f.t_ms };
+        this.f = emptyFeatures({ baseline_n: s.baseline, sensor_health: s.health });
+        this.tTrigger = this.tLast = s.t_ms;
+        this.runAlive = true;
+        this.schmitt = 0;
+        this.triggerTrace = [
+          `t=${f0(s.t_ms)}ms TRIGGER delta=${f3(s.delta)}N >= trigger_delta_n=${pyRepr(th.trigger_delta_n)}N (baseline frozen at ${f3(s.baseline)}N)`,
+        ];
+        this.step(s); // beginCandidate() calls update(trigger); the return value is ignored
+        return { kind: 'candidate_started', t_ms: s.t_ms };
       }
       return { kind: 'none' };
     }
     // candidate
-    if (HEALTH_RANK[f.health] > HEALTH_RANK[this.worstHealth]) this.worstHealth = f.health;
-    if (!f.valid) return { kind: 'decision', decision: this.decide(f.t_ms) };
-    this.peakDelta = Math.max(this.peakDelta, f.delta);
-    this.maxRate = Math.max(this.maxRate, f.rate);
-    this.maxVar = Math.max(this.maxVar, f.variance);
-    if (f.delta >= th.trigger_delta_n) {
-      if (this.continuous) this.lastAboveT = f.t_ms;
-    } else this.continuous = false;
-    this.trackOsc(f.detrended);
-    if (this.peakDelta > th.manual_handling_delta_n) return { kind: 'decision', decision: this.decide(f.t_ms) };
-    if (f.t_ms - this.tStart + DT_MS >= th.confirm_min_ms) return { kind: 'decision', decision: this.decide(f.t_ms) };
+    if (this.step(s)) return { kind: 'decision', decision: this.decide(s.t_ms) };
     return { kind: 'none' };
-  }
-
-  private trackOsc(d: number) {
-    const band = this.th.osc_band_n;
-    const s = d > band ? 1 : d < -band ? -1 : 0;
-    if (s !== 0) {
-      if (this.oscState !== 0 && s !== this.oscState) this.oscCount++;
-      this.oscState = s;
-    }
   }
 }
