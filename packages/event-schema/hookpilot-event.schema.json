@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hookpilot.dev/schemas/hookpilot-event/1.0.0",
+  "title": "HookPilot Event Record",
+  "description": "One audit record per candidate bite event / automation cycle. Shared by web demo (TS), firmware (C++), and services (Python). Simulation records MUST set source.mode='simulation'.",
+  "type": "object",
+  "required": ["schema_version","event_id","device","source","timestamp","calibration","sensor_data","features","classification","safety","actuation","outcome","integrity"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "event_id": {"type": "string", "description": "Unique: <device_id>-<monotonic counter>-<8 hex rand> or UUIDv4"},
+    "device": {"type":"object","required":["device_id","firmware_version"],"properties":{
+      "device_id":{"type":"string"},"firmware_version":{"type":"string"},"hardware_revision":{"type":"string"}}},
+    "source": {"type":"object","required":["mode"],"properties":{
+      "mode":{"enum":["simulation","bench","field"]},
+      "scenario":{"type":"string","description":"e.g. bite, noise_current, rod_vibration, manual_handling, excessive_tension, sensor_failure, comm_loss, motor_stall"},
+      "seed":{"type":"integer","description":"PRNG seed for reproducible synthetic signals"},
+      "ground_truth_label":{"type":["string","null"]}}},
+    "timestamp": {"type":"object","required":["start_utc","clock_quality"],"properties":{
+      "start_utc":{"type":"string","format":"date-time"},"end_utc":{"type":"string","format":"date-time"},
+      "monotonic_ms":{"type":"integer"},
+      "clock_quality":{"enum":["ntp_synced","gps","rtc_unsynced","host_clock_simulated"]}}},
+    "calibration": {"type":"object","required":["calibration_version"],"properties":{
+      "calibration_version":{"type":"string"},"scale_n_per_count":{"type":"number"},"offset_counts":{"type":"number"},"calibrated_utc":{"type":["string","null"]}}},
+    "sensor_data": {"type":"object","required":["sample_rate_hz","units"],"properties":{
+      "sample_rate_hz":{"type":"number"},"units":{"const":"N"},
+      "samples":{"type":"array","items":{"type":"array","prefixItems":[{"type":"number","description":"t_ms"},{"type":"number","description":"tension_N"}]}},
+      "raw_data_ref":{"type":["string","null"],"description":"Path/URI of raw data file when samples not inlined"},
+      "raw_data_sha256":{"type":["string","null"]}}},
+    "features": {"type":"object","properties":{
+      "baseline_n":{"type":"number"},"peak_delta_n":{"type":"number"},"max_rate_n_per_s":{"type":"number"},
+      "duration_above_ms":{"type":"number"},"short_term_variance":{"type":"number"},
+      "oscillation_count":{"type":"integer"},"sensor_health":{"enum":["ok","degraded","disconnected","out_of_range","stuck"]}}},
+    "classification": {"type":"object","required":["result","reason"],"properties":{
+      "result":{"enum":["bite_candidate_confirmed","rejected_transient","rejected_noise","rejected_vibration","rejected_manual_handling","rejected_sensor_fault","no_event"]},
+      "reason":{"type":"string"},"rule_trace":{"type":"array","items":{"type":"string"}},
+      "classifier":{"type":"string","description":"e.g. deterministic-baseline-v1"},
+      "thresholds":{"type":"object","description":"The configurable thresholds in force (not validated values)"}}},
+    "safety": {"type":"object","required":["decision"],"properties":{
+      "decision":{"enum":["permit","deny","safe_stop"]},
+      "armed":{"type":"boolean"},"interlocks":{"type":"object"},
+      "faults":{"type":"array","items":{"type":"string","description":"E_STOP, OVER_TENSION, SENSOR_DISCONNECTED, SENSOR_OUT_OF_RANGE, MOTOR_STALL, ACTUATOR_TIMEOUT, COMM_LOSS, UNDERVOLTAGE, WATCHDOG_RESET, OVER_TEMP"}}}},
+    "actuation": {"type":"object","properties":{
+      "requested":{"type":"array","items":{"type":"object","properties":{"actuator":{"enum":["hook_set","retrieval"]},"command":{"type":"string"},"limit":{"type":"object"},"t_ms":{"type":"number"}}}},
+      "feedback":{"type":"array","items":{"type":"object","properties":{"actuator":{"type":"string"},"t_ms":{"type":"number"},"position":{"type":["number","null"]},"current_a":{"type":["number","null"]},"tension_n":{"type":["number","null"]},"status":{"type":"string"}}}},
+      "simulated":{"type":"boolean"}}},
+    "outcome": {"type":"object","required":["final_state","stop_reason","milestones"],"properties":{
+      "final_state":{"enum":["MONITOR","SAFE_STOP","IDLE"]},
+      "stop_reason":{"type":"string"},
+      "milestones":{"type":"object","required":["bite_detected","hook_set_completed","retrieval_completed","fish_landed"],"properties":{
+        "bite_detected":{"type":"boolean"},"hook_set_completed":{"type":"boolean"},"retrieval_completed":{"type":"boolean"},
+        "fish_landed":{"enum":["unknown","confirmed_by_observer","not_landed"],"description":"NEVER inferred from actuator completion; only an independent observer sets confirmed_by_observer"}}},
+      "test_outcome":{"enum":["pass","fail","not_evaluated"]}}},
+    "integrity": {"type":"object","required":["record_sha256","hash_algorithm"],"properties":{
+      "hash_algorithm":{"const":"sha256"},
+      "record_sha256":{"type":"string","description":"sha256 of canonical JSON (sorted keys, no whitespace) of the record with integrity.record_sha256 set to empty string"},
+      "prev_record_sha256":{"type":["string","null"],"description":"hash chain"},
+      "signature":{"type":["string","null"],"description":"null in prototype: no secure element yet"}}}
+  }
+}
