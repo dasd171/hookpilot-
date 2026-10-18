@@ -49,7 +49,9 @@ def replay(record: dict, tolerance: float = 1e-6, raw_base_dir: str | None = Non
         named = gen is not None
         gen = gen or GENERATOR_ID
         if gen != GENERATOR_ID:
-            out["notes"].append(f"generator {gen!r} unknown to this replay tool; signal check skipped")
+            hint = (" (retired web-demo generator, replaced by hookpilot-synth-v1 on 2026-10-18)"
+                    if gen == "hookpilot-web-synth-v1" else "")
+            out["notes"].append(f"generator {gen!r} unknown to this replay tool{hint}; signal check skipped")
         else:
             last_t = samples[-1][0] if samples else 0.0
             dur = int(max(8000.0, last_t + 1000.0 / rate))
@@ -89,7 +91,8 @@ def replay(record: dict, tolerance: float = 1e-6, raw_base_dir: str | None = Non
             out["regenerated_result"] = classify(regen, th, rate).result
             if not named and out["signal_match"] is False:
                 out["notes"].append("record does not name source.generator and does not match hookpilot-synth-v1 "
-                                    "(e.g. the web demo's hookpilot-web-synth-v1, not ported): signal check inconclusive")
+                                    "(e.g. a legacy web-demo record from the retired hookpilot-web-synth-v1): "
+                                    "signal check inconclusive")
                 out["signal_match"] = None
                 out.pop("regenerated_result", None)
     elif src.get("mode") == "simulation":
