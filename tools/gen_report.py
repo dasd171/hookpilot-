@@ -50,7 +50,6 @@ def main() -> int:
     records = simmetrics.build_records(seeds)
     m = simmetrics.compute_metrics(records, validate_every=a.validate_every)
     sw = simmetrics.sweep(range(1, a.sweep_seeds + 1))
-    vc = simmetrics.variant_comparison(range(1, a.sweep_seeds + 1))
     elapsed = time.time() - t0
     th = Thresholds.defaults("fw")
     prov = {
@@ -64,7 +63,7 @@ def main() -> int:
         "sweep_seeds_per_scenario": a.sweep_seeds, "runtime_s": round(elapsed, 1),
         "command": "python tools/gen_report.py " + " ".join(sys.argv[1:]),
     }
-    out = {"provenance": prov, "metrics": m, "threshold_sweep": sw, "variant_comparison": vc}
+    out = {"provenance": prov, "metrics": m, "threshold_sweep": sw}
     with open(os.path.join(a.out, "simulation_metrics.json"), "w") as f:
         json.dump(out, f, indent=2)
     with open(os.path.join(a.out, "per_scenario.csv"), "w", newline="") as f:
@@ -146,15 +145,11 @@ def main() -> int:
                  f"{pct(r['false_trigger_rate'])} ({r['fp']}/{r['n_neg']}) |")
     L.append("\nThe sweep shows the recall / false-trigger trade-off on synthetic data only; choosing real thresholds "
              "requires calibrated bench data and labeled field recordings (docs/calibration.md).\n")
-    L.append("## Implementation variants on the same synthetic signals\n")
-    L.append("Two ports of `deterministic-baseline-v1` exist in the monorepo with different defaults "
-             "(firmware C++ vs web-demo TS). Same signals, each with its own defaults:\n")
-    L.append("| variant | recall (bite) | false-trigger rate |\n|---|---|---|")
-    for v, d in vc.items():
-        L.append(f"| {v} ({IMPLEMENTATION[v]}) | {pct(d['recall_bite'])} | {pct(d['false_trigger_rate'])} |")
-    L.append("\nThe web demo's own generator (`hookpilot-web-synth-v1`) differs from `hookpilot-synth-v1`, so these "
-             "web-variant numbers are NOT the web demo's behaviour on its own scenarios. Unifying the two variants is "
-             "an open item (docs/testing.md).\n")
+    L.append("## Implementations\n")
+    L.append("One rule set and one generator are shared by all three implementations: firmware C++ (ground truth), "
+             "this Python port, and the web demo's TypeScript port (`hookpilot-synth-v1` + firmware defaults). "
+             "Agreement is checked by tests/integration/test_cross_impl.py and apps/web-demo/tests/cross_impl.test.ts; "
+             "this report itself is computed with the Python port only.\n")
     with open(os.path.join(a.out, "simulation_report.md"), "w") as f:
         f.write("\n".join(L) + "\n")
     print(f"SIMULATION report written to {a.out} in {elapsed:.1f}s")
