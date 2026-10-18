@@ -88,7 +88,15 @@ def replay(record: dict, tolerance: float = 1e-6, raw_base_dir: str | None = Non
                 out["signal_match"] = missing == 0 and md <= tol and len(cmp) > 0
                 if missing:
                     out["notes"].append(f"{missing} recorded sample times not on the regenerated grid")
-            out["regenerated_result"] = classify(regen, th, rate).result
+            dr = classify(regen, th, rate)
+            out["regenerated_result"] = dr.result
+            rt = cls.get("trigger_t_ms")
+            if rt is not None and dr.trigger_t_ms is not None and float(rt) != float(dr.trigger_t_ms):
+                # a later candidate of a multi-event run (after a re-arm or a disarmed observation): the
+                # regenerated window's FIRST decision is a different candidate, so it is not comparable.
+                out["later_candidate"] = True
+                out["notes"].append(f"record is a later candidate (trigger t={rt} ms, first candidate of the "
+                                    f"regenerated window at t={dr.trigger_t_ms} ms): rules_consistent is authoritative")
             if not named and out["signal_match"] is False:
                 out["notes"].append("record does not name source.generator and does not match hookpilot-synth-v1 "
                                     "(e.g. a legacy web-demo record from the retired hookpilot-web-synth-v1): "
@@ -104,7 +112,9 @@ def replay(record: dict, tolerance: float = 1e-6, raw_base_dir: str | None = Non
         d = classify(samples, th, rate)
         out["replayed_result"] = d.result
         out["recorded_samples_result"] = d.result
-        if "regenerated_result" in out and out.get("signal_match"):
+        if out.get("later_candidate"):
+            out["classification_match"] = None
+        elif "regenerated_result" in out and out.get("signal_match"):
             # full-history replay from (scenario, seed) is authoritative
             out["classification_match"] = out["regenerated_result"] == cls.get("result")
         else:
@@ -139,7 +149,16 @@ def replay(record: dict, tolerance: float = 1e-6, raw_base_dir: str | None = Non
     if partial:
         out["notes"].append(f"recorded samples start at t={t0} ms (pre-roll window): sample replay is informational; "
                             "rules_consistent is authoritative when the signal cannot be regenerated")
-    if out["signal_match"] is not None:
+    sd = record.get("sensor_data") or {}
+    if samples is None and sd.get("samples") == [] and cls.get("result") == "no_event" and not sd.get("raw_data_ref"):
+        # e.g. the boot record after a watchdog reset: no signal was observed, nothing to replay
+        out["notes"].append("record carries no samples and no decision (e.g. watchdog-reset boot record)")
+        out["signal_match"] = None
+        out["ok"] = True
+        return out
+    if out.get("later_candidate"):
+        out["ok"] = bool(out["signal_match"]) and out["rules_consistent"] is True
+    elif out["signal_match"] is not None:
         out["ok"] = bool(out["signal_match"]) and out["classification_match"] is True and out["rules_consistent"] in (True, None)
     elif partial:
         out["ok"] = out["rules_consistent"] is True
