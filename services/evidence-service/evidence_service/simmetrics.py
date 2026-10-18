@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 
 from .chain import verify_records
 from .classifier import Thresholds, classify
-from .engine import EventLog, build_event
+from .engine import EventLog, build_events
 from .replay import replay
 from .synth import (EXPECTED_CLASSIFICATION, EXPECTED_FAULT, NEGATIVE_SCENARIOS, POSITIVE_SCENARIOS, SCENARIOS,
                     generate)
@@ -41,25 +41,50 @@ def _stats(xs: list[float]) -> dict:
 
 
 def build_records(seeds: range, scenarios=SCENARIOS, armed: bool = True) -> list[dict]:
+    """Every record of every run (multi-event runs included), hash-chained in run order."""
     log = EventLog()
     n = 0
     for sc in scenarios:
         for seed in seeds:
-            n += 1
-            log.append(build_event(sc, seed, armed=armed, counter=n))
+            for r in build_events(sc, seed, armed=armed, counter=n + 1):
+                n += 1
+                log.append(r)
     return log.records
 
 
+def primary_records(records: list[dict]) -> list[dict]:
+    """First record of each (scenario, seed) run: the decision on the first candidate (or the safety stop /
+    end-of-window no_event summary). Per-scenario classification metrics are computed on these."""
+    seen, out = set(), []
+    for r in records:
+        k = (r["source"]["scenario"], r["source"]["seed"])
+        if k not in seen:
+            seen.add(k)
+            out.append(r)
+    return out
+
+
+def _overlap(rec: dict) -> bool:
+    """Hook-set moving strictly inside a retrieval active interval (request -> terminal feedback)."""
+    req = [q["t_ms"] for q in rec["actuation"]["requested"] if q["actuator"] == "retrieval" and q.get("decision") == "permit"]
+    if not req:
+        return False
+    r0 = req[0]
+    fb = rec["actuation"]["feedback"]
+    ends = [f["t_ms"] for f in fb if f["actuator"] == "retrieval" and f["t_ms"] >= r0
+            and f["status"] in ("at_target", "stopped", "stalled")]
+    r1 = ends[0] if ends else float("inf")
+    return any(r0 < f["t_ms"] < r1 for f in fb if f["actuator"] == "hook_set" and f["status"] == "moving")
+
+
 def _fault_latch_time(rec: dict, fault: str) -> float | None:
-    for line in rec["safety"]["interlocks"].get("log", []):
-        if f"FAULT {fault}" in line:
-            return float(line.split("ms")[0].split("=")[1])
-    return None
+    t = (rec["safety"].get("fault_latched_t_ms") or {}).get(fault)
+    return None if t is None else float(t)
 
 
 def compute_metrics(records: list[dict], *, validate_every: int = 1, replay_every: int = 1) -> dict:
     by_sc: dict[str, list[dict]] = defaultdict(list)
-    for r in records:
+    for r in primary_records(records):
         by_sc[r["source"]["scenario"]].append(r)
 
     per = {}
@@ -113,18 +138,21 @@ def compute_metrics(records: list[dict], *, validate_every: int = 1, replay_ever
         lat = []
         for r in hit:
             if sc in ("motor_stall", "comm_loss"):
+                # the scenario fault is injected at the end of the first tick with (t - retrieval start) >=
+                # fault_after_retrieval_start_ms and acts from the next tick (docs/engine-spec.md)
                 p = generate(sc, r["source"]["seed"]).params
                 req = [q for q in r["actuation"]["requested"] if q["actuator"] == "retrieval"]
                 if req:
-                    tr = req[0]["t_ms"]
-                    t_fault = tr + 20.0 * round(p["fault_after_retrieval_start_ms"] / 20.0)
+                    t_inj = req[0]["t_ms"] + 20.0 * math.ceil(p["fault_after_retrieval_start_ms"] / 20.0)
                     tl = _fault_latch_time(r, faults[0])
                     if tl is not None:
-                        lat.append(tl - t_fault)
+                        lat.append(tl - (t_inj + 20.0))
             elif sc == "excessive_tension":
-                lim = r["safety"]["interlocks"]["limits"]["retrieval_force_limit_n"]
-                fb = [f for f in r["actuation"]["feedback"] if f["actuator"] == "retrieval" and f.get("tension_n") is not None]
-                first = next((f["t_ms"] for f in fb if f["tension_n"] > lim), None)
+                lim = r["safety"]["interlocks"]["retrieval_force_limit_n"]
+                hard = r["safety"]["interlocks"]["hard_max_tension_n"]
+                req = [q["t_ms"] for q in r["actuation"]["requested"] if q["actuator"] == "retrieval"]
+                t_r = req[0] if req else float("inf")
+                first = next((t for t, x in r["sensor_data"]["samples"] if x > hard or (t > t_r and x > lim)), None)
                 tl = _fault_latch_time(r, "OVER_TENSION")
                 if first is not None and tl is not None:
                     lat.append(tl - first)
@@ -133,12 +161,7 @@ def compute_metrics(records: list[dict], *, validate_every: int = 1, replay_ever
                       "detection_latency_ms_after_condition_onset": _stats(lat)}
 
     # invariants on every record
-    sim_overlap = 0
-    for r in records:
-        h = [f["t_ms"] for f in r["actuation"]["feedback"] if f["actuator"] == "hook_set"]
-        q = [f["t_ms"] for f in r["actuation"]["feedback"] if f["actuator"] == "retrieval"]
-        if h and q and min(q) <= max(h):
-            sim_overlap += 1
+    sim_overlap = sum(1 for r in records if _overlap(r))
     fish = Counter(r["outcome"]["milestones"]["fish_landed"] for r in records)
     act_unarmed = sum(1 for r in records if r["actuation"]["requested"] and not r["safety"]["armed"])
     sub = records[::validate_every]
